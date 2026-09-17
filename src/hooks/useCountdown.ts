@@ -1,36 +1,89 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { TimerMode } from "../types";
 
-export type CountdownStatus = "idle" | "running" | "paused" | "finished";
+export type TimerStatus = "idle" | "running" | "paused" | "finished";
 
 const TICK_INTERVAL_MS = 250;
 export const MAX_DURATION_MS = 24 * 60 * 60 * 1000;
 
-/**
- * Timestamp-based countdown. Elapsed time is derived from wall-clock
- * `endsAt` (or `remainingMs` while paused) rather than by accumulating
- * interval ticks, so it stays accurate even if timers are throttled
- * and simple adjustments just move `endsAt` later (M2).
- */
-export function useCountdown(initialDurationMs = 5 * 60 * 1000) {
-  const [status, setStatus] = useState<CountdownStatus>("idle");
+export function useTimer(initialDurationMs = 5 * 60 * 1000) {
+  const [mode, setModeState] = useState<TimerMode>("countdown");
+  const [status, setStatus] = useState<TimerStatus>("idle");
   const [durationMs, setDurationMs] = useState(initialDurationMs);
   const [remainingMs, setRemainingMs] = useState(initialDurationMs);
-  const endsAtRef = useRef<number | null>(null);
-  const statusRef = useRef<CountdownStatus>("idle");
-  const remainingRef = useRef(initialDurationMs);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [activeElapsedMs, setActiveElapsedMs] = useState(0);
+
+  const modeRef = useRef<TimerMode>("countdown");
+  const statusRef = useRef<TimerStatus>("idle");
   const durationRef = useRef(initialDurationMs);
+  const remainingRef = useRef(initialDurationMs);
+  const elapsedRef = useRef(0);
+  const activeElapsedRef = useRef(0);
+  const endsAtRef = useRef<number | null>(null);
+  const startedAtRef = useRef<number | null>(null);
+  const activeStartedAtRef = useRef<number | null>(null);
 
+  modeRef.current = mode;
   statusRef.current = status;
-  remainingRef.current = remainingMs;
   durationRef.current = durationMs;
+  remainingRef.current = remainingMs;
+  elapsedRef.current = elapsedMs;
+  activeElapsedRef.current = activeElapsedMs;
 
-  /**
-   * Starts a countdown. When `ms` is omitted, the currently displayed
-   * remaining time is used, so idle adjustments (+/-) always carry over
-   * to what Start actually counts down. (After a finish the displayed
-   * value is 0, so the last session duration is used instead.)
-   */
+  const setMode = useCallback(
+    (nextMode: TimerMode) => {
+      if (statusRef.current === "running") return false;
+      if (nextMode === modeRef.current) return true;
+
+      setModeState(nextMode);
+
+      if (nextMode === "counter") {
+        startedAtRef.current = null;
+        activeStartedAtRef.current = null;
+        if (statusRef.current !== "paused") {
+          elapsedRef.current = 0;
+          setElapsedMs(0);
+          activeElapsedRef.current = 0;
+          setActiveElapsedMs(0);
+        }
+        if (durationRef.current <= 0) {
+          durationRef.current = initialDurationMs;
+          setDurationMs(initialDurationMs);
+        }
+        return true;
+      }
+
+      if (statusRef.current !== "paused") {
+        const safeDuration =
+          durationRef.current > 0 ? durationRef.current : initialDurationMs;
+        durationRef.current = safeDuration;
+        remainingRef.current = safeDuration;
+        setDurationMs(safeDuration);
+        setRemainingMs(safeDuration);
+        if (statusRef.current === "finished") {
+          setStatus("idle");
+        }
+        activeElapsedRef.current = 0;
+        setActiveElapsedMs(0);
+      }
+
+      return true;
+    },
+    [initialDurationMs],
+  );
+
   const start = useCallback((ms?: number) => {
+    activeStartedAtRef.current = Date.now() - activeElapsedRef.current;
+    if (modeRef.current === "counter") {
+      const base = Math.min(ms ?? elapsedRef.current, MAX_DURATION_MS);
+      startedAtRef.current = Date.now() - base;
+      elapsedRef.current = base;
+      setElapsedMs(base);
+      setStatus("running");
+      return;
+    }
+
     const base =
       ms ?? (remainingRef.current > 0 ? remainingRef.current : durationRef.current);
     const duration = Math.max(0, base);
@@ -41,33 +94,94 @@ export function useCountdown(initialDurationMs = 5 * 60 * 1000) {
   }, []);
 
   const pause = useCallback(() => {
+    if (modeRef.current === "counter") {
+      if (statusRef.current !== "running" || startedAtRef.current === null) return;
+      const elapsed = Math.min(
+        Date.now() - startedAtRef.current,
+        durationRef.current,
+      );
+      elapsedRef.current = elapsed;
+      setElapsedMs(elapsed);
+      startedAtRef.current = null;
+      if (activeStartedAtRef.current !== null) {
+        const activeElapsed = Date.now() - activeStartedAtRef.current;
+        activeElapsedRef.current = activeElapsed;
+        setActiveElapsedMs(activeElapsed);
+        activeStartedAtRef.current = null;
+      }
+      setStatus("paused");
+      return;
+    }
+
     if (statusRef.current !== "running" || endsAtRef.current === null) return;
     const remaining = Math.max(0, endsAtRef.current - Date.now());
     endsAtRef.current = null;
     remainingRef.current = remaining;
     setRemainingMs(remaining);
+    if (activeStartedAtRef.current !== null) {
+      const activeElapsed = Date.now() - activeStartedAtRef.current;
+      activeElapsedRef.current = activeElapsed;
+      setActiveElapsedMs(activeElapsed);
+      activeStartedAtRef.current = null;
+    }
     setStatus("paused");
   }, []);
 
   const resume = useCallback(() => {
+    if (modeRef.current === "counter") {
+      if (statusRef.current !== "paused") return;
+      startedAtRef.current = Date.now() - elapsedRef.current;
+      activeStartedAtRef.current = Date.now() - activeElapsedRef.current;
+      setStatus("running");
+      return;
+    }
+
     if (statusRef.current !== "paused") return;
     endsAtRef.current = Date.now() + remainingRef.current;
+    activeStartedAtRef.current = Date.now() - activeElapsedRef.current;
     setStatus("running");
   }, []);
 
   const reset = useCallback(() => {
     endsAtRef.current = null;
+    startedAtRef.current = null;
+    activeStartedAtRef.current = null;
+    activeElapsedRef.current = 0;
+    setActiveElapsedMs(0);
+
+    if (modeRef.current === "counter") {
+      elapsedRef.current = 0;
+      setElapsedMs(0);
+      setStatus("idle");
+      return;
+    }
+
     setStatus("idle");
     setRemainingMs(durationMs);
+    remainingRef.current = durationMs;
   }, [durationMs]);
 
-  /**
-   * Shifts the remaining time by `deltaMs` without pausing. While
-   * running this just moves `endsAt`; while paused/idle it changes
-   * the stored remaining time. Clamps to [0, MAX_DURATION_MS]; hitting
-   * zero finishes the session.
-   */
   const adjust = useCallback((deltaMs: number) => {
+    if (modeRef.current === "counter") {
+      const nextElapsed = Math.min(elapsedRef.current + deltaMs, MAX_DURATION_MS);
+
+      elapsedRef.current = nextElapsed;
+      setElapsedMs(nextElapsed);
+
+      if (statusRef.current === "running" && startedAtRef.current !== null) {
+        startedAtRef.current = Date.now() - nextElapsed;
+      }
+
+      if (nextElapsed >= durationRef.current) {
+        startedAtRef.current = null;
+        activeStartedAtRef.current = null;
+        setStatus("finished");
+      } else if (statusRef.current === "finished") {
+        setStatus("idle");
+      }
+      return;
+    }
+
     if (statusRef.current === "running" && endsAtRef.current !== null) {
       const newRemaining = endsAtRef.current - Date.now() + deltaMs;
       if (newRemaining <= 0) {
@@ -84,56 +198,102 @@ export function useCountdown(initialDurationMs = 5 * 60 * 1000) {
       return;
     }
 
-    // idle, paused, or finished: adjust the stored remaining time
     const newRemaining = Math.min(
       Math.max(0, remainingRef.current + deltaMs),
       MAX_DURATION_MS,
     );
     remainingRef.current = newRemaining;
     setRemainingMs(newRemaining);
+
     if (newRemaining === 0) {
       endsAtRef.current = null;
       setStatus("finished");
-    } else if (statusRef.current === "idle" || statusRef.current === "finished") {
-      // never started (or finished): adjusting returns to Ready
+      return;
+    }
+
+    if (statusRef.current === "idle" || statusRef.current === "finished") {
       if (statusRef.current === "finished") setStatus("idle");
-      // keep reset() consistent
       setDurationMs(newRemaining);
+      durationRef.current = newRemaining;
     }
   }, []);
 
   useEffect(() => {
     if (status !== "running") return;
+
     const tick = () => {
-      if (endsAtRef.current === null) return;
-      const remaining = Math.max(0, endsAtRef.current - Date.now());
-      setRemainingMs(remaining);
-      if (remaining <= 0) {
-        endsAtRef.current = null;
+      if (mode === "countdown") {
+        if (endsAtRef.current === null) return;
+        const remaining = Math.max(0, endsAtRef.current - Date.now());
+        setRemainingMs(remaining);
+        remainingRef.current = remaining;
+        if (activeStartedAtRef.current !== null) {
+          const activeElapsed = Date.now() - activeStartedAtRef.current;
+          setActiveElapsedMs(activeElapsed);
+          activeElapsedRef.current = activeElapsed;
+        }
+        if (remaining <= 0) {
+          endsAtRef.current = null;
+          activeStartedAtRef.current = null;
+          setStatus("finished");
+        }
+        return;
+      }
+
+      if (startedAtRef.current === null) return;
+      const elapsed = Math.min(Date.now() - startedAtRef.current, durationRef.current);
+      setElapsedMs(elapsed);
+      elapsedRef.current = elapsed;
+      if (activeStartedAtRef.current !== null) {
+        const activeElapsed = Date.now() - activeStartedAtRef.current;
+        setActiveElapsedMs(activeElapsed);
+        activeElapsedRef.current = activeElapsed;
+      }
+      if (elapsed >= durationRef.current) {
+        startedAtRef.current = null;
+        activeStartedAtRef.current = null;
         setStatus("finished");
       }
     };
+
     const interval = setInterval(tick, TICK_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [status]);
+  }, [mode, status]);
 
-  /**
-   * Stops any countdown (running or paused) and loads `ms` as the new
-   * session duration in the idle state, ready for Start.
-   */
   const load = useCallback((ms: number) => {
     const clamped = Math.min(Math.max(0, ms), MAX_DURATION_MS);
     endsAtRef.current = null;
+    startedAtRef.current = null;
+    activeStartedAtRef.current = null;
+
+    if (modeRef.current === "counter") {
+      durationRef.current = clamped;
+      setDurationMs(clamped);
+      elapsedRef.current = 0;
+      setElapsedMs(0);
+      activeElapsedRef.current = 0;
+      setActiveElapsedMs(0);
+      setStatus("idle");
+      return;
+    }
+
     remainingRef.current = clamped;
     setRemainingMs(clamped);
     setDurationMs(clamped);
+    durationRef.current = clamped;
+    activeElapsedRef.current = 0;
+    setActiveElapsedMs(0);
     setStatus("idle");
   }, []);
 
   return {
+    mode,
     status,
     remainingMs,
     durationMs,
+    elapsedMs,
+    activeElapsedMs,
+    setMode,
     start,
     pause,
     resume,
@@ -142,3 +302,5 @@ export function useCountdown(initialDurationMs = 5 * 60 * 1000) {
     load,
   };
 }
+
+export const useCountdown = useTimer;

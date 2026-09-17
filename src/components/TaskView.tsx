@@ -6,12 +6,23 @@ interface TaskViewProps {
   selectedTaskId: string;
   onSelectTask: (taskId: string) => void;
   onAddTask: (name: string) => void;
+  onUpdateTask: (taskId: string, changes: Partial<Pick<Task, "name" | "pinned" | "archived">>) => void;
+  onDeleteTask: (taskId: string) => void;
 }
 
-export function TaskView({ tasks, selectedTaskId, onSelectTask, onAddTask }: TaskViewProps) {
+export function TaskView({
+  tasks,
+  selectedTaskId,
+  onSelectTask,
+  onAddTask,
+  onUpdateTask,
+  onDeleteTask,
+}: TaskViewProps) {
   const [query, setQuery] = useState("");
   const [draftName, setDraftName] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
 
   const visibleTasks = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -33,6 +44,68 @@ export function TaskView({ tasks, selectedTaskId, onSelectTask, onAddTask }: Tas
     setDraftName("");
     setShowForm(false);
   };
+
+  const startEditing = (task: Task) => {
+    setEditingId(task.id);
+    setEditingName(task.name);
+  };
+
+  const saveEdit = (event: FormEvent<HTMLFormElement>, taskId: string) => {
+    event.preventDefault();
+    const name = editingName.trim();
+    if (!name) return;
+    onUpdateTask(taskId, { name });
+    setEditingId(null);
+  };
+
+  const renderTask = (task: Task) => (
+    <li key={task.id} className="task-list-row">
+      {editingId === task.id ? (
+        <form className="task-edit-form" onSubmit={(event) => saveEdit(event, task.id)}>
+          <input
+            type="text"
+            value={editingName}
+            maxLength={60}
+            autoFocus
+            onChange={(event) => setEditingName(event.target.value)}
+          />
+          <button type="submit" className="task-row-action primary">Save</button>
+          <button type="button" className="task-row-action" onClick={() => setEditingId(null)}>
+            Cancel
+          </button>
+        </form>
+      ) : (
+        <>
+          <button
+            type="button"
+            className={task.id === selectedTaskId ? "task-item selected" : "task-item"}
+            onClick={() => onSelectTask(task.id)}
+          >
+            <span className="task-item-name">
+              {task.pinned && <span className="task-star" aria-hidden="true">★</span>}
+              {task.name}
+            </span>
+          </button>
+          <div className="task-row-actions">
+            <button type="button" className="task-row-action" onClick={() => startEditing(task)}>Edit</button>
+            <button
+              type="button"
+              className="task-row-action"
+              onClick={() => onUpdateTask(task.id, { pinned: !task.pinned })}
+            >
+              {task.pinned ? "Unpin" : "Pin"}
+            </button>
+            <button type="button" className="task-row-action" onClick={() => onUpdateTask(task.id, { archived: true })}>
+              Archive
+            </button>
+            <button type="button" className="task-row-action danger" onClick={() => onDeleteTask(task.id)}>
+              Delete
+            </button>
+          </div>
+        </>
+      )}
+    </li>
+  );
 
   return (
     <section className="glass-card tasks-view">
@@ -83,22 +156,7 @@ export function TaskView({ tasks, selectedTaskId, onSelectTask, onAddTask }: Tas
             <div className="task-group">
               <span className="task-group-label">Pinned</span>
               <ul className="task-list">
-                {pinnedTasks.map((task) => (
-                  <li key={task.id}>
-                    <button
-                      type="button"
-                      className={task.id === selectedTaskId ? "task-item selected" : "task-item"}
-                      onClick={() => onSelectTask(task.id)}
-                    >
-                      <span className="task-item-name">
-                        <span className="task-star" aria-hidden="true">
-                          ★
-                        </span>
-                        {task.name}
-                      </span>
-                    </button>
-                  </li>
-                ))}
+                {pinnedTasks.map(renderTask)}
               </ul>
             </div>
           )}
@@ -107,17 +165,7 @@ export function TaskView({ tasks, selectedTaskId, onSelectTask, onAddTask }: Tas
             <div className="task-group">
               <span className="task-group-label">Other</span>
               <ul className="task-list">
-                {otherTasks.map((task) => (
-                  <li key={task.id}>
-                    <button
-                      type="button"
-                      className={task.id === selectedTaskId ? "task-item selected" : "task-item"}
-                      onClick={() => onSelectTask(task.id)}
-                    >
-                      <span className="task-item-name">{task.name}</span>
-                    </button>
-                  </li>
-                ))}
+                {otherTasks.map(renderTask)}
               </ul>
             </div>
           )}

@@ -13,3 +13,5 @@ export type Task = {
 };
 
 export type AppView = "timer" | "tasks" | "history";
+
+export type TimerMode = "countdown" | "counter";
