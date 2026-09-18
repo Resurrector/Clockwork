@@ -1,9 +1,9 @@
 import "./App.css";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 import { useTimer } from "./hooks/useCountdown";
-import { formatDuration } from "./lib/time";
+import { formatDuration, formatHistoryDuration } from "./lib/time";
 import { playCompletionAlarm } from "./lib/alarm";
 import { WheelPicker } from "./components/WheelPicker";
 import { PresetManager } from "./components/PresetManager";
@@ -11,7 +11,8 @@ import { AppNavigation } from "./components/AppNavigation";
 import { TaskSelector } from "./components/TaskSelector";
 import { TaskView } from "./components/TaskView";
 import { loadTasks, saveTasks } from "./lib/tasks";
-import type { AppView, Task, TimerMode } from "./types";
+import { createSession, loadHistory, saveHistory } from "./lib/history";
+import type { AppView, SessionRecord, Task, TimerMode } from "./types";
 
 const RING_RADIUS = 80;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
@@ -21,12 +22,13 @@ const MIN_WINDOW_HEIGHT = 640;
 const showSidebar = import.meta.env.VITE_SHOW_SIDEBAR !== "false";
 const showTaskSelector = import.meta.env.VITE_SHOW_TASK_SELECTOR !== "false";
 
-const mockHistory = [
-  { day: "Today", task: "Deep Work", duration: "1h 20m", total: "5h 45m" },
-  { day: "Yesterday", task: "Programming", duration: "2h 10m", total: "4h 40m" },
-  { day: "Mon", task: "Study", duration: "55m", total: "3h 25m" },
-  { day: "Sun", task: "Reading", duration: "40m", total: "2h 50m" },
-];
+const recordTotalMs = (entry: SessionRecord) => entry.totalMs ?? entry.durationMs;
+const recordCompensatedMs = (entry: SessionRecord) => entry.compensatedMs ?? entry.distractedMs ?? 0;
+const recordActiveMs = (entry: SessionRecord) => entry.activeMs ?? 0;
+const recordFocusedMs = (entry: SessionRecord) => entry.focusedMs ?? 0;
+const normalizeTaskName = (name: string) => name.trim().toLocaleLowerCase();
+const sessionDate = (entry: SessionRecord) =>
+  new Date(entry.startedAt ?? entry.completedAt).toDateString();
 
 function App() {
   const appWindow = getCurrentWindow();
@@ -108,6 +110,8 @@ function App() {
     durationMs,
     elapsedMs,
     activeElapsedMs,
+    startedAtMs,
+    endedAtMs,
     start,
     pause,
     resume,
@@ -120,15 +124,100 @@ function App() {
   const [activeView, setActiveView] = useState<AppView>("timer");
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
   const [tasks, setTasks] = useState<Task[]>(() => loadTasks());
+  const [history, setHistory] = useState<SessionRecord[]>(() => loadHistory());
   const [selectedTaskId, setSelectedTaskId] = useState("");
   const [selection, setSelection] = useState<"20s" | "2m" | "custom">("20s");
   const [customMinutes, setCustomMinutes] = useState(1);
   const [customSeconds, setCustomSeconds] = useState(0);
+  const [editingHistoryId, setEditingHistoryId] = useState<string | null>(null);
+  const [editingHistoryName, setEditingHistoryName] = useState("");
+  const sessionRef = useRef<{
+    taskId: string;
+    taskName: string;
+    mode: TimerMode;
+    compensatedMs: number;
+  } | null>(null);
 
   useEffect(() => {
     saveTasks(tasks);
   }, [tasks]);
 
+  useEffect(() => {
+    saveHistory(history);
+  }, [history]);
+
+  const previousStatusRef = useRef(status);
+  useEffect(() => {
+    if (status === "finished" && previousStatusRef.current !== "finished") {
+      const session = sessionRef.current;
+      const endedAt = endedAtMs ?? Date.now();
+      const startedAt = startedAtMs;
+      const compensatedMs = session?.compensatedMs ?? 0;
+      const activeMs = Math.max(0, activeElapsedMs);
+      if (startedAt !== null && endedAt >= startedAt) {
+        const totalMs = endedAt - startedAt;
+        if (totalMs <= 0 && activeMs <= 0) {
+          sessionRef.current = null;
+          previousStatusRef.current = status;
+          return;
+        }
+        setHistory((previous) => [
+          createSession(
+            session?.taskId ?? selectedTaskId,
+            session?.taskName ?? tasks.find((candidate) => candidate.id === selectedTaskId)?.name ?? "Unassigned",
+            totalMs,
+            session?.mode ?? mode,
+            {
+              totalMs,
+              activeMs,
+              compensatedMs,
+              distractedMs: compensatedMs,
+              focusedMs: Math.max(0, activeMs - compensatedMs),
+              startedAt: new Date(startedAt).toISOString(),
+              endedAt: new Date(endedAt).toISOString(),
+            },
+          ),
+          ...previous,
+        ]);
+      }
+      sessionRef.current = null;
+    }
+    previousStatusRef.current = status;
+  }, [activeElapsedMs, elapsedMs, endedAtMs, mode, selectedTaskId, startedAtMs, status, tasks]);
+
+  const today = new Date().toDateString();
+  const todayHistory = history.filter((entry) => sessionDate(entry) === today);
+  const todayTotalMs = todayHistory.reduce((total, entry) => total + recordFocusedMs(entry), 0);
+  const todayTaskSummaries = useMemo(() => {
+    const summaries = new Map<string, { name: string; focusedMs: number; sessions: number }>();
+    for (const entry of todayHistory) {
+      const key = normalizeTaskName(entry.taskName);
+      const current = summaries.get(key);
+      if (current) {
+        current.focusedMs += recordFocusedMs(entry);
+        current.sessions += 1;
+      } else {
+        summaries.set(key, { name: entry.taskName.trim(), focusedMs: recordFocusedMs(entry), sessions: 1 });
+      }
+    }
+    return [...summaries.values()].sort((left, right) => right.focusedMs - left.focusedMs);
+  }, [todayHistory]);
+  const groupedHistory = useMemo(() => {
+    const groups: Array<{ date: string; entries: SessionRecord[] }> = [];
+    const groupsByDate = new Map<string, { date: string; entries: SessionRecord[] }>();
+    for (const entry of history.slice(0, 20)) {
+      const date = sessionDate(entry);
+      const current = groupsByDate.get(date);
+      if (current) {
+        current.entries.push(entry);
+      } else {
+        const group = { date, entries: [entry] };
+        groupsByDate.set(date, group);
+        groups.push(group);
+      }
+    }
+    return groups;
+  }, [history]);
   useEffect(() => {
     if (tasks.length === 0) {
       setSelectedTaskId("");
@@ -174,14 +263,60 @@ function App() {
     setTasks((previous) => previous.filter((task) => task.id !== taskId));
   };
 
+  const startHistoryEdit = (entry: SessionRecord) => {
+    setEditingHistoryId(entry.id);
+    setEditingHistoryName(entry.taskName);
+  };
+
+  const saveHistoryEdit = (entryId: string) => {
+    const taskName = editingHistoryName.trim();
+    if (!taskName) return;
+    setHistory((previous) =>
+      previous.map((entry) => (entry.id === entryId ? { ...entry, taskName } : entry)),
+    );
+    setEditingHistoryId(null);
+    setEditingHistoryName("");
+  };
+
+  const deleteHistoryEntry = (entry: SessionRecord) => {
+    if (!window.confirm(`Delete the session for "${entry.taskName}"?`)) return;
+    setHistory((previous) => previous.filter((candidate) => candidate.id !== entry.id));
+    if (editingHistoryId === entry.id) {
+      setEditingHistoryId(null);
+      setEditingHistoryName("");
+    }
+  };
+
   const customAmountMs = customMinutes * 60_000 + customSeconds * 1000;
   const adjustmentMs =
     selection === "20s" ? 20_000 : selection === "2m" ? 120_000 : customAmountMs;
 
-  const handleAdjust = (direction: 1 | -1) => adjust(direction * adjustmentMs);
+  const handleAdjust = (direction: 1 | -1) => {
+    const deltaMs = direction * adjustmentMs;
+    adjust(deltaMs);
+    const isCompensatedAdjustment =
+      status === "running" &&
+      ((mode === "countdown" && deltaMs > 0) ||
+        (mode === "counter" && deltaMs < 0));
+    if (isCompensatedAdjustment) {
+      const compensatedMs = Math.abs(deltaMs);
+      if (sessionRef.current) {
+        sessionRef.current.compensatedMs += compensatedMs;
+      }
+    }
+  };
 
   const handleStartPauseResume = () => {
-    if (status === "idle" || status === "finished") start();
+    if (status === "idle" || status === "finished") {
+      const task = tasks.find((candidate) => candidate.id === selectedTaskId);
+      sessionRef.current = {
+        taskId: selectedTaskId,
+        taskName: task?.name ?? "Unassigned",
+        mode,
+        compensatedMs: 0,
+      };
+      start();
+    }
     else if (status === "running") pause();
     else resume();
   };
@@ -278,7 +413,11 @@ function App() {
               aria-label={isSidebarExpanded ? "Collapse sidebar" : "Expand sidebar"}
               aria-expanded={isSidebarExpanded}
             >
-              CW
+              {isSidebarExpanded ? "CW" : (
+                <svg className="sidebar-toggle-icon" viewBox="0 0 20 20" aria-hidden="true">
+                  <path d="M3 5h14M3 10h14M3 15h14" />
+                </svg>
+              )}
             </button>
             <div>
               <div className="brand-name">ClockWork</div>
@@ -290,20 +429,20 @@ function App() {
 
           <div className="sidebar-summary">
             <div className="summary-label">Today</div>
-            <div className="summary-value">3h 20m</div>
-            <div className="summary-meta">+32% vs. yesterday</div>
+            <div className="summary-value">{formatHistoryDuration(todayTotalMs)}</div>
+            <div className="summary-meta">{todayHistory.length} completed session{todayHistory.length === 1 ? "" : "s"}</div>
           </div>
 
           <div className="sidebar-footer">
             <div className="footer-label">Focus streak</div>
-            <div className="footer-value">12 days</div>
+            <div className="footer-value">{new Set(history.map((entry) => entry.completedAt.slice(0, 10))).size} days</div>
           </div>
           </aside>
         )}
 
         <div className="workspace">
           {activeView === "timer" && (
-            <div className="screen timer-screen">
+            <div className="screen timer-screen" key="timer">
               <header className="screen-header">
                 <div>
                   <p className="eyebrow">Focus session</p>
@@ -437,7 +576,7 @@ function App() {
           )}
 
           {activeView === "tasks" && (
-            <div className="screen tasks-screen">
+            <div className="screen tasks-screen" key="tasks">
               <header className="screen-header">
                 <div>
                   <p className="eyebrow">Workspace</p>
@@ -457,7 +596,7 @@ function App() {
           )}
 
           {activeView === "history" && (
-            <div className="screen history-screen">
+            <div className="screen history-screen" key="history">
               <header className="screen-header">
                 <div>
                   <p className="eyebrow">Insights</p>
@@ -465,40 +604,98 @@ function App() {
                 </div>
               </header>
 
-              <div className="history-grid">
-                <div className="summary-card glass-card">
-                  <span className="field-label">This week</span>
-                  <strong>18h 30m</strong>
-                  <small>Across 7 sessions</small>
-                </div>
-                <div className="summary-card glass-card">
-                  <span className="field-label">Longest focus</span>
-                  <strong>1h 42m</strong>
-                  <small>Deep Work</small>
-                </div>
-                <div className="summary-card glass-card">
-                  <span className="field-label">Most active day</span>
-                  <strong>Tuesday</strong>
-                  <small>6h 15m</small>
-                </div>
-              </div>
+              <section className="history-task-summary">
+                <div className="history-section-label">Today's tasks</div>
+                {todayTaskSummaries.length === 0 ? (
+                  <div className="history-task-summary-empty">No completed tasks today.</div>
+                ) : (
+                  <div className="history-task-grid">
+                    {todayTaskSummaries.map((task) => (
+                      <div className="history-task-card glass-card" key={normalizeTaskName(task.name)}>
+                        <span className="history-task-card-name">{task.name}</span>
+                        <strong>{formatHistoryDuration(task.focusedMs)}</strong>
+                        <small>{task.sessions} session{task.sessions === 1 ? "" : "s"}</small>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
 
               <section className="glass-card history-panel">
                 <div className="history-panel-header">
                   <span className="field-label">Recent sessions</span>
-                  <button type="button" className="link-button">
-                    View all
-                  </button>
+                  <span className="history-count">{history.length} total</span>
                 </div>
 
                 <div className="history-list">
-                  {mockHistory.map((entry) => (
-                    <div className="history-row" key={`${entry.day}-${entry.task}`}>
-                      <div className="history-day">{entry.day}</div>
-                      <div className="history-task">{entry.task}</div>
-                      <div className="history-duration">{entry.duration}</div>
-                      <div className="history-total">{entry.total}</div>
+                  {history.length === 0 ? (
+                    <div className="history-placeholder">
+                      <h2>No completed sessions yet</h2>
+                      <p>Completed focus sessions will appear here.</p>
                     </div>
+                  ) : groupedHistory.map((group) => (
+                    <section className="history-day-group" key={group.date}>
+                      <div className="history-day-divider">
+                        <span>{new Date(group.entries[0].startedAt ?? group.entries[0].completedAt).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}</span>
+                      </div>
+                      <div className="history-day-list">
+                        {group.entries.map((entry) => (
+                          <details className="history-entry" key={entry.id}>
+                            <summary className="history-row">
+                              <div className="history-task">
+                                {editingHistoryId === entry.id ? (
+                                  <input
+                                    className="history-task-edit"
+                                    value={editingHistoryName}
+                                    maxLength={60}
+                                    onChange={(event) => setEditingHistoryName(event.target.value)}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      event.preventDefault();
+                                    }}
+                                    aria-label="History task name"
+                                  />
+                                ) : (
+                                  <span>{entry.taskName}</span>
+                                )}
+                              </div>
+                              <div className="history-duration" title="Focused time">
+                                <span className="history-duration-label">Focused</span>
+                                {formatHistoryDuration(recordFocusedMs(entry))}
+                              </div>
+                              <div className="history-total" title="Session start and end time">
+                                {entry.startedAt ? new Date(entry.startedAt).toLocaleTimeString() : "—"} –{" "}
+                                {entry.endedAt ? new Date(entry.endedAt).toLocaleTimeString() : "—"}
+                              </div>
+                            </summary>
+                            <div className="history-actions" onClick={(event) => event.stopPropagation()}>
+                              {editingHistoryId === entry.id ? (
+                                <>
+                                  <button type="button" className="history-action primary" onClick={() => saveHistoryEdit(entry.id)}>Save</button>
+                                  <button type="button" className="history-action" onClick={() => setEditingHistoryId(null)}>Cancel</button>
+                                </>
+                              ) : (
+                                <>
+                                  <button type="button" className="history-action" onClick={() => startHistoryEdit(entry)}>Edit task</button>
+                                  <button type="button" className="history-action danger" onClick={() => deleteHistoryEntry(entry)}>Delete</button>
+                                </>
+                              )}
+                            </div>
+                            <div className="history-details">
+                              <span>Mode: {entry.mode === "countdown" ? "Countdown" : "Counter"}</span>
+                              <span>Total: {formatHistoryDuration(recordTotalMs(entry))}</span>
+                              <span>Active: {formatHistoryDuration(recordActiveMs(entry))}</span>
+                              <span>Focused: {formatHistoryDuration(recordFocusedMs(entry))}</span>
+                              <span>Compensated: {formatHistoryDuration(recordCompensatedMs(entry))}</span>
+                              <span>
+                                {entry.startedAt ? new Date(entry.startedAt).toLocaleTimeString() : "—"} –{" "}
+                                {entry.endedAt ? new Date(entry.endedAt).toLocaleTimeString() : new Date(entry.completedAt).toLocaleTimeString()}
+                              </span>
+                            </div>
+                          </details>
+                        ))}
+                      </div>
+                    </section>
                   ))}
                 </div>
               </section>

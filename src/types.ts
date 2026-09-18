@@ -15,3 +15,26 @@ export type Task = {
 export type AppView = "timer" | "tasks" | "history";
 
 export type TimerMode = "countdown" | "counter";
+
+export type SessionRecord = {
+  id: string;
+  taskId: string;
+  taskName: string;
+  durationMs: number;
+  /** Wall-clock duration from session start through session end. */
+  totalMs?: number;
+  mode: TimerMode;
+  completedAt: string;
+  /** Time spent while the timer was running (as opposed to paused). */
+  activeMs?: number;
+  /** Time counted as focused work for this session. */
+  focusedMs?: number;
+  /** Time counted as distracted work for this session. */
+  distractedMs?: number;
+  /** Manual compensation applied while the session was running. */
+  compensatedMs?: number;
+  /** Timestamp at which this timer session was first started. */
+  startedAt?: string;
+  /** Timestamp at which this timer session ended. */
+  endedAt?: string;
+};

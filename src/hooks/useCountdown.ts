@@ -13,6 +13,8 @@ export function useTimer(initialDurationMs = 5 * 60 * 1000) {
   const [remainingMs, setRemainingMs] = useState(initialDurationMs);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [activeElapsedMs, setActiveElapsedMs] = useState(0);
+  const [startedAtMs, setStartedAtMs] = useState<number | null>(null);
+  const [endedAtMs, setEndedAtMs] = useState<number | null>(null);
 
   const modeRef = useRef<TimerMode>("countdown");
   const statusRef = useRef<TimerStatus>("idle");
@@ -23,6 +25,7 @@ export function useTimer(initialDurationMs = 5 * 60 * 1000) {
   const endsAtRef = useRef<number | null>(null);
   const startedAtRef = useRef<number | null>(null);
   const activeStartedAtRef = useRef<number | null>(null);
+  const sessionStartedAtRef = useRef<number | null>(null);
 
   modeRef.current = mode;
   statusRef.current = status;
@@ -42,6 +45,9 @@ export function useTimer(initialDurationMs = 5 * 60 * 1000) {
         startedAtRef.current = null;
         activeStartedAtRef.current = null;
         if (statusRef.current !== "paused") {
+          sessionStartedAtRef.current = null;
+          setStartedAtMs(null);
+          setEndedAtMs(null);
           elapsedRef.current = 0;
           setElapsedMs(0);
           activeElapsedRef.current = 0;
@@ -55,6 +61,9 @@ export function useTimer(initialDurationMs = 5 * 60 * 1000) {
       }
 
       if (statusRef.current !== "paused") {
+        sessionStartedAtRef.current = null;
+        setStartedAtMs(null);
+        setEndedAtMs(null);
         const safeDuration =
           durationRef.current > 0 ? durationRef.current : initialDurationMs;
         durationRef.current = safeDuration;
@@ -74,6 +83,11 @@ export function useTimer(initialDurationMs = 5 * 60 * 1000) {
   );
 
   const start = useCallback((ms?: number) => {
+    if (sessionStartedAtRef.current === null) {
+      sessionStartedAtRef.current = Date.now();
+      setStartedAtMs(sessionStartedAtRef.current);
+    }
+    setEndedAtMs(null);
     activeStartedAtRef.current = Date.now() - activeElapsedRef.current;
     if (modeRef.current === "counter") {
       const base = Math.min(ms ?? elapsedRef.current, MAX_DURATION_MS);
@@ -148,6 +162,9 @@ export function useTimer(initialDurationMs = 5 * 60 * 1000) {
     activeStartedAtRef.current = null;
     activeElapsedRef.current = 0;
     setActiveElapsedMs(0);
+    sessionStartedAtRef.current = null;
+    setStartedAtMs(null);
+    setEndedAtMs(null);
 
     if (modeRef.current === "counter") {
       elapsedRef.current = 0;
@@ -173,9 +190,15 @@ export function useTimer(initialDurationMs = 5 * 60 * 1000) {
       }
 
       if (nextElapsed >= durationRef.current) {
+        if (activeStartedAtRef.current !== null) {
+          const activeElapsed = Date.now() - activeStartedAtRef.current;
+          activeElapsedRef.current = activeElapsed;
+          setActiveElapsedMs(activeElapsed);
+        }
         startedAtRef.current = null;
         activeStartedAtRef.current = null;
         setStatus("finished");
+        setEndedAtMs(Date.now());
       } else if (statusRef.current === "finished") {
         setStatus("idle");
       }
@@ -185,10 +208,16 @@ export function useTimer(initialDurationMs = 5 * 60 * 1000) {
     if (statusRef.current === "running" && endsAtRef.current !== null) {
       const newRemaining = endsAtRef.current - Date.now() + deltaMs;
       if (newRemaining <= 0) {
+        if (activeStartedAtRef.current !== null) {
+          const activeElapsed = Date.now() - activeStartedAtRef.current;
+          activeElapsedRef.current = activeElapsed;
+          setActiveElapsedMs(activeElapsed);
+        }
         endsAtRef.current = null;
         remainingRef.current = 0;
         setRemainingMs(0);
         setStatus("finished");
+        setEndedAtMs(Date.now());
         return;
       }
       const clamped = Math.min(newRemaining, MAX_DURATION_MS);
@@ -208,6 +237,7 @@ export function useTimer(initialDurationMs = 5 * 60 * 1000) {
     if (newRemaining === 0) {
       endsAtRef.current = null;
       setStatus("finished");
+      setEndedAtMs(Date.now());
       return;
     }
 
@@ -236,6 +266,7 @@ export function useTimer(initialDurationMs = 5 * 60 * 1000) {
           endsAtRef.current = null;
           activeStartedAtRef.current = null;
           setStatus("finished");
+          setEndedAtMs(Date.now());
         }
         return;
       }
@@ -253,6 +284,7 @@ export function useTimer(initialDurationMs = 5 * 60 * 1000) {
         startedAtRef.current = null;
         activeStartedAtRef.current = null;
         setStatus("finished");
+        setEndedAtMs(Date.now());
       }
     };
 
@@ -265,6 +297,9 @@ export function useTimer(initialDurationMs = 5 * 60 * 1000) {
     endsAtRef.current = null;
     startedAtRef.current = null;
     activeStartedAtRef.current = null;
+    sessionStartedAtRef.current = null;
+    setStartedAtMs(null);
+    setEndedAtMs(null);
 
     if (modeRef.current === "counter") {
       durationRef.current = clamped;
@@ -293,6 +328,8 @@ export function useTimer(initialDurationMs = 5 * 60 * 1000) {
     durationMs,
     elapsedMs,
     activeElapsedMs,
+    startedAtMs,
+    endedAtMs,
     setMode,
     start,
     pause,

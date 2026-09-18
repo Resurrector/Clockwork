@@ -23,15 +23,17 @@ export function TaskView({
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
+  const [openActionsId, setOpenActionsId] = useState<string | null>(null);
 
   const visibleTasks = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return tasks.filter((task) => {
-      if (task.archived) return false;
+      if (task.archived !== showArchived) return false;
       if (!normalized) return true;
       return task.name.toLowerCase().includes(normalized);
     });
-  }, [query, tasks]);
+  }, [query, showArchived, tasks]);
 
   const pinnedTasks = visibleTasks.filter((task) => task.pinned);
   const otherTasks = visibleTasks.filter((task) => !task.pinned);
@@ -87,20 +89,23 @@ export function TaskView({
             </span>
           </button>
           <div className="task-row-actions">
-            <button type="button" className="task-row-action" onClick={() => startEditing(task)}>Edit</button>
             <button
               type="button"
-              className="task-row-action"
-              onClick={() => onUpdateTask(task.id, { pinned: !task.pinned })}
+              className="task-menu-trigger"
+              aria-label={`Actions for ${task.name}`}
+              aria-expanded={openActionsId === task.id}
+              onClick={() => setOpenActionsId((open) => open === task.id ? null : task.id)}
             >
-              {task.pinned ? "Unpin" : "Pin"}
+              ⋯
             </button>
-            <button type="button" className="task-row-action" onClick={() => onUpdateTask(task.id, { archived: true })}>
-              Archive
-            </button>
-            <button type="button" className="task-row-action danger" onClick={() => onDeleteTask(task.id)}>
-              Delete
-            </button>
+            {openActionsId === task.id && (
+              <div className="task-action-menu">
+                {!task.archived && <button type="button" className="task-row-action" onClick={() => { startEditing(task); setOpenActionsId(null); }}>Edit</button>}
+                {!task.archived && <button type="button" className="task-row-action" onClick={() => { onUpdateTask(task.id, { pinned: !task.pinned }); setOpenActionsId(null); }}>{task.pinned ? "Unpin" : "Pin"}</button>}
+                <button type="button" className="task-row-action" onClick={() => { onUpdateTask(task.id, { archived: !task.archived }); setOpenActionsId(null); }}>{task.archived ? "Restore" : "Archive"}</button>
+                <button type="button" className="task-row-action danger" onClick={() => onDeleteTask(task.id)}>Delete</button>
+              </div>
+            )}
           </div>
         </>
       )}
@@ -113,6 +118,9 @@ export function TaskView({
         <h2>Tasks</h2>
         <button type="button" className="task-add-trigger" onClick={() => setShowForm((open) => !open)}>
           {showForm ? "Close" : "+ Add Task"}
+        </button>
+        <button type="button" className="task-archive-toggle" onClick={() => setShowArchived((archived) => !archived)}>
+          {showArchived ? "Active tasks" : "Archived"}
         </button>
       </div>
 
