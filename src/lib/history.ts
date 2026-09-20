@@ -12,6 +12,8 @@ function isSession(value: unknown): value is SessionRecord {
     typeof entry.durationMs === "number" &&
     Number.isFinite(entry.durationMs) &&
     entry.durationMs > 0 &&
+    (entry.goalMs === undefined ||
+      (typeof entry.goalMs === "number" && Number.isFinite(entry.goalMs) && entry.goalMs >= 0)) &&
     (entry.totalMs === undefined ||
       (typeof entry.totalMs === "number" && Number.isFinite(entry.totalMs) && entry.totalMs >= 0)) &&
     (entry.mode === "countdown" || entry.mode === "counter") &&
@@ -27,7 +29,8 @@ function isSession(value: unknown): value is SessionRecord {
     typeof entry.startedAt === "string" &&
     Number.isFinite(Date.parse(entry.startedAt)) &&
     typeof entry.endedAt === "string" &&
-    Number.isFinite(Date.parse(entry.endedAt))
+    Number.isFinite(Date.parse(entry.endedAt)) &&
+    (entry.isLive === undefined || typeof entry.isLive === "boolean")
   );
 }
 
@@ -37,18 +40,17 @@ export function normalizeSession(entry: SessionRecord): SessionRecord {
   const timestampTotalMs = endedAtMs - startedAtMs;
   const totalMs = Math.max(0, Number.isFinite(timestampTotalMs) ? timestampTotalMs : entry.totalMs ?? entry.durationMs);
   const activeMs = Math.min(totalMs, Math.max(0, entry.activeMs ?? entry.durationMs));
-  const compensatedMs = Math.min(
-    activeMs,
-    Math.max(0, entry.compensatedMs ?? entry.distractedMs ?? 0),
-  );
+  const compensatedMs = Math.max(0, entry.compensatedMs ?? entry.distractedMs ?? 0);
+  const focusedMs = Math.max(0, activeMs - compensatedMs);
   return {
     ...entry,
+    goalMs: Math.max(0, entry.goalMs ?? entry.durationMs),
     durationMs: totalMs,
     totalMs,
     activeMs,
     compensatedMs,
     distractedMs: compensatedMs,
-    focusedMs: Math.max(0, activeMs - compensatedMs),
+    focusedMs,
   };
 }
 
@@ -57,7 +59,11 @@ export function loadHistory(): SessionRecord[] {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter(isSession).map(normalizeSession) : [];
+    return Array.isArray(parsed)
+      ? parsed
+          .filter(isSession)
+          .map((entry) => normalizeSession({ ...entry, isLive: false }))
+      : [];
   } catch {
     return [];
   }
@@ -85,11 +91,11 @@ export function createSession(
   durationMs: number,
   mode: TimerMode,
   metrics: Partial<
-    Pick<SessionRecord, "activeMs" | "focusedMs" | "distractedMs" | "compensatedMs" | "totalMs" | "startedAt" | "endedAt">
+    Pick<SessionRecord, "id" | "activeMs" | "focusedMs" | "distractedMs" | "compensatedMs" | "totalMs" | "startedAt" | "endedAt" | "goalMs" | "isLive">
   > = {},
 ): SessionRecord {
   return normalizeSession({
-    id: createSessionId(),
+    id: metrics.id ?? createSessionId(),
     taskId,
     taskName,
     durationMs,

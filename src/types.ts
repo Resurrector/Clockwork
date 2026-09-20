@@ -21,6 +21,8 @@ export type SessionRecord = {
   taskId: string;
   taskName: string;
   durationMs: number;
+  /** Goal duration selected when the session was started. */
+  goalMs?: number;
   /** Wall-clock duration from session start through session end. */
   totalMs?: number;
   mode: TimerMode;
@@ -37,4 +39,6 @@ export type SessionRecord = {
   startedAt?: string;
   /** Timestamp at which this timer session ended. */
   endedAt?: string;
+  /** True while this session is still in progress. */
+  isLive?: boolean;
 };

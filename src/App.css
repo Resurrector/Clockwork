@@ -502,7 +502,7 @@ body {
 }
 
 .workspace {
-  width: auto;
+  width: 100%;
   height: 100%;
   min-width: 0;
   padding: 18px clamp(16px, 3vw, 48px) 28px
@@ -684,6 +684,82 @@ body {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  cursor: pointer;
+}
+
+.timer-display[role="button"]:focus-visible {
+  outline: 2px solid rgba(125, 179, 255, 0.8);
+  outline-offset: 8px;
+}
+
+.timer-display[role="button"][tabindex="-1"] {
+  cursor: default;
+}
+
+.goal-panel-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(2, 7, 12, 0.68);
+  backdrop-filter: blur(8px);
+}
+
+.goal-panel {
+  width: min(360px, 100%);
+  padding: 20px;
+  border: 1px solid rgba(150, 194, 255, 0.2);
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.45);
+}
+
+.goal-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.goal-panel-header h2 {
+  margin: 6px 0 0;
+  color: #edf4ff;
+  font-size: 20px;
+  letter-spacing: -0.03em;
+}
+
+.goal-panel-close {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(232, 237, 242, 0.72);
+  font: inherit;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.goal-panel-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+.goal-panel .wheel-picker {
+  margin: 0 auto 20px;
+}
+
+.goal-panel-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.goal-panel-actions .btn {
+  min-width: 0;
 }
 
 .timer-ring {
@@ -714,6 +790,8 @@ body {
 }
 
 .timer-time {
+  position: relative;
+  z-index: 1;
   font-size: 42px;
   font-weight: 300;
   font-variant-numeric: tabular-nums;
@@ -722,6 +800,18 @@ body {
   transition:
     color 0.3s ease,
     text-shadow 0.3s ease;
+}
+
+.timer-goal {
+  position: absolute;
+  bottom: 39px;
+  z-index: 1;
+  color: rgba(232, 237, 242, 0.54);
+  font-size: 10px;
+  font-weight: 100;
+  letter-spacing: 0.12em;
+  text-transform: none;
+  white-space: nowrap;
 }
 
 .timer-display.running .timer-time {

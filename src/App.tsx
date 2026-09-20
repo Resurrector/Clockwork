@@ -11,7 +11,7 @@ import { AppNavigation } from "./components/AppNavigation";
 import { TaskSelector } from "./components/TaskSelector";
 import { TaskView } from "./components/TaskView";
 import { loadTasks, saveTasks } from "./lib/tasks";
-import { createSession, loadHistory, saveHistory } from "./lib/history";
+import { createSession, createSessionId, loadHistory, saveHistory } from "./lib/history";
 import type { AppView, SessionRecord, Task, TimerMode } from "./types";
 
 const RING_RADIUS = 80;
@@ -129,13 +129,19 @@ function App() {
   const [selection, setSelection] = useState<"20s" | "2m" | "custom">("20s");
   const [customMinutes, setCustomMinutes] = useState(1);
   const [customSeconds, setCustomSeconds] = useState(0);
+  const [isGoalPanelOpen, setIsGoalPanelOpen] = useState(false);
+  const [goalMinutes, setGoalMinutes] = useState(0);
+  const [goalSeconds, setGoalSeconds] = useState(0);
+  const [adjustmentRevision, setAdjustmentRevision] = useState(0);
   const [editingHistoryId, setEditingHistoryId] = useState<string | null>(null);
   const [editingHistoryName, setEditingHistoryName] = useState("");
   const sessionRef = useRef<{
+    id: string;
     taskId: string;
     taskName: string;
     mode: TimerMode;
-    compensatedMs: number;
+    goalMs: number;
+    adjustmentTotalMs: number;
   } | null>(null);
 
   useEffect(() => {
@@ -148,42 +154,42 @@ function App() {
 
   const previousStatusRef = useRef(status);
   useEffect(() => {
+    const session = sessionRef.current;
+    const startedAt = startedAtMs;
+    if (session && startedAt !== null && activeElapsedMs > 1000) {
+      const endedAt = status === "finished" ? endedAtMs ?? Date.now() : Date.now();
+      const totalMs = Math.max(0, endedAt - startedAt);
+      const record = createSession(session.taskId, session.taskName, totalMs, session.mode, {
+        id: session.id,
+        totalMs,
+        goalMs: session.goalMs,
+        activeMs: Math.max(0, activeElapsedMs),
+        compensatedMs:
+          session.mode === "countdown"
+            ? Math.max(0, session.adjustmentTotalMs)
+            : Math.max(0, -session.adjustmentTotalMs),
+        distractedMs:
+          session.mode === "countdown"
+            ? Math.max(0, session.adjustmentTotalMs)
+            : Math.max(0, -session.adjustmentTotalMs),
+        focusedMs: session.goalMs,
+        startedAt: new Date(startedAt).toISOString(),
+        endedAt: new Date(endedAt).toISOString(),
+        isLive: status !== "finished",
+      });
+      setHistory((previous) => {
+        const existingIndex = previous.findIndex((entry) => entry.id === session.id);
+        if (existingIndex === -1) return [record, ...previous];
+        const next = [...previous];
+        next[existingIndex] = record;
+        return next;
+      });
+    }
     if (status === "finished" && previousStatusRef.current !== "finished") {
-      const session = sessionRef.current;
-      const endedAt = endedAtMs ?? Date.now();
-      const startedAt = startedAtMs;
-      const compensatedMs = session?.compensatedMs ?? 0;
-      const activeMs = Math.max(0, activeElapsedMs);
-      if (startedAt !== null && endedAt >= startedAt) {
-        const totalMs = endedAt - startedAt;
-        if (totalMs <= 0 && activeMs <= 0) {
-          sessionRef.current = null;
-          previousStatusRef.current = status;
-          return;
-        }
-        setHistory((previous) => [
-          createSession(
-            session?.taskId ?? selectedTaskId,
-            session?.taskName ?? tasks.find((candidate) => candidate.id === selectedTaskId)?.name ?? "Unassigned",
-            totalMs,
-            session?.mode ?? mode,
-            {
-              totalMs,
-              activeMs,
-              compensatedMs,
-              distractedMs: compensatedMs,
-              focusedMs: Math.max(0, activeMs - compensatedMs),
-              startedAt: new Date(startedAt).toISOString(),
-              endedAt: new Date(endedAt).toISOString(),
-            },
-          ),
-          ...previous,
-        ]);
-      }
       sessionRef.current = null;
     }
     previousStatusRef.current = status;
-  }, [activeElapsedMs, elapsedMs, endedAtMs, mode, selectedTaskId, startedAtMs, status, tasks]);
+  }, [activeElapsedMs, adjustmentRevision, endedAtMs, startedAtMs, status]);
 
   const today = new Date().toDateString();
   const todayHistory = history.filter((entry) => sessionDate(entry) === today);
@@ -293,16 +299,14 @@ function App() {
 
   const handleAdjust = (direction: 1 | -1) => {
     const deltaMs = direction * adjustmentMs;
+    if (mode === "counter" && status === "idle") {
+      load(Math.min(Math.max(0, durationMs + deltaMs), 24 * 60 * 60 * 1000));
+      return;
+    }
     adjust(deltaMs);
-    const isCompensatedAdjustment =
-      status === "running" &&
-      ((mode === "countdown" && deltaMs > 0) ||
-        (mode === "counter" && deltaMs < 0));
-    if (isCompensatedAdjustment) {
-      const compensatedMs = Math.abs(deltaMs);
-      if (sessionRef.current) {
-        sessionRef.current.compensatedMs += compensatedMs;
-      }
+    if (sessionRef.current && (status === "running" || status === "paused")) {
+      sessionRef.current.adjustmentTotalMs += deltaMs;
+      setAdjustmentRevision((revision) => revision + 1);
     }
   };
 
@@ -310,10 +314,12 @@ function App() {
     if (status === "idle" || status === "finished") {
       const task = tasks.find((candidate) => candidate.id === selectedTaskId);
       sessionRef.current = {
+        id: createSessionId(),
         taskId: selectedTaskId,
         taskName: task?.name ?? "Unassigned",
         mode,
-        compensatedMs: 0,
+        goalMs: durationMs,
+        adjustmentTotalMs: 0,
       };
       start();
     }
@@ -321,10 +327,62 @@ function App() {
     else resume();
   };
 
+  const finalizeSession = () => {
+    const session = sessionRef.current;
+    if (!session || startedAtMs === null || activeElapsedMs <= 1000) return;
+    const endedAt = Date.now();
+    const totalMs = Math.max(0, endedAt - startedAtMs);
+    const record = createSession(session.taskId, session.taskName, totalMs, session.mode, {
+      id: session.id,
+      totalMs,
+      goalMs: session.goalMs,
+      activeMs: activeElapsedMs,
+      compensatedMs:
+        session.mode === "countdown"
+          ? Math.max(0, session.adjustmentTotalMs)
+          : Math.max(0, -session.adjustmentTotalMs),
+      distractedMs:
+        session.mode === "countdown"
+          ? Math.max(0, session.adjustmentTotalMs)
+          : Math.max(0, -session.adjustmentTotalMs),
+      focusedMs: session.goalMs,
+      startedAt: new Date(startedAtMs).toISOString(),
+      endedAt: new Date(endedAt).toISOString(),
+      isLive: false,
+    });
+    setHistory((previous) => {
+      const existingIndex = previous.findIndex((entry) => entry.id === session.id);
+      if (existingIndex === -1) return [record, ...previous];
+      const next = [...previous];
+      next[existingIndex] = record;
+      return next;
+    });
+    sessionRef.current = null;
+  };
+
   const primaryLabel =
     status === "running" ? "Pause" : status === "paused" ? "Resume" : "Start";
 
   const displayMs = mode === "countdown" ? remainingMs : elapsedMs;
+  const goalMs = sessionRef.current?.goalMs ?? durationMs;
+  const handleReset = () => {
+    finalizeSession();
+    reset();
+  };
+  const openGoalPanel = () => {
+    if (status === "running" || status === "paused") return;
+    setGoalMinutes(Math.floor(durationMs / 60_000));
+    setGoalSeconds(Math.floor((durationMs % 60_000) / 1000));
+    setIsGoalPanelOpen(true);
+  };
+  const applyGoal = () => {
+    const nextGoalMs = Math.min(
+      Math.max(0, goalMinutes * 60_000 + goalSeconds * 1000),
+      24 * 60 * 60 * 1000,
+    );
+    load(nextGoalMs);
+    setIsGoalPanelOpen(false);
+  };
   const ringProgress =
     mode === "countdown"
       ? durationMs > 0
@@ -363,7 +421,9 @@ function App() {
         e.preventDefault();
         if (!e.repeat) handleStartPauseResume();
       } else if (e.key === "r" || e.key === "R") {
-        if (!e.repeat && status !== "idle") reset();
+        if (!e.repeat && status !== "idle") handleReset();
+      } else if (e.key === "Escape") {
+        setIsGoalPanelOpen(false);
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -430,7 +490,7 @@ function App() {
           <div className="sidebar-summary">
             <div className="summary-label">Today</div>
             <div className="summary-value">{formatHistoryDuration(todayTotalMs)}</div>
-            <div className="summary-meta">{todayHistory.length} completed session{todayHistory.length === 1 ? "" : "s"}</div>
+            <div className="summary-meta">{todayHistory.length} session{todayHistory.length === 1 ? "" : "s"}</div>
           </div>
 
           <div className="sidebar-footer">
@@ -460,6 +520,16 @@ function App() {
                           ? "timer-display finished"
                           : "timer-display"
                     }
+                    onClick={openGoalPanel}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        openGoalPanel();
+                      }
+                    }}
+                    role="button"
+                    tabIndex={status === "running" || status === "paused" ? -1 : 0}
+                    aria-label="Set time goal"
                   >
                     <svg className="timer-ring" viewBox="0 0 180 180" aria-hidden="true">
                       <circle className="timer-ring-track" cx="90" cy="90" r={RING_RADIUS} />
@@ -473,7 +543,49 @@ function App() {
                       />
                     </svg>
                     <span className="timer-time">{formatDuration(displayMs)}</span>
+                    <span className="timer-goal">Goal {formatDuration(goalMs)}</span>
                   </div>
+
+                  {isGoalPanelOpen && (
+                    <div className="goal-panel-backdrop" onClick={() => setIsGoalPanelOpen(false)}>
+                      <section
+                        className="goal-panel glass-card"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="goal-panel-title"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <div className="goal-panel-header">
+                          <div>
+                            <span className="field-label">Session setup</span>
+                            <h2 id="goal-panel-title">Set time goal</h2>
+                          </div>
+                          <button
+                            type="button"
+                            className="goal-panel-close"
+                            onClick={() => setIsGoalPanelOpen(false)}
+                            aria-label="Close goal panel"
+                          >
+                            ×
+                          </button>
+                        </div>
+                        <WheelPicker
+                          minutes={goalMinutes}
+                          seconds={goalSeconds}
+                          onMinutesChange={setGoalMinutes}
+                          onSecondsChange={setGoalSeconds}
+                        />
+                        <div className="goal-panel-actions">
+                          <button type="button" className="btn btn-secondary" onClick={() => setIsGoalPanelOpen(false)}>
+                            Cancel
+                          </button>
+                          <button type="button" className="btn btn-primary" onClick={applyGoal}>
+                            Apply goal
+                          </button>
+                        </div>
+                      </section>
+                    </div>
+                  )}
 
                   <div className="timer-metadata">
                     <div className="timer-metadata-mode">
@@ -516,7 +628,7 @@ function App() {
                 </div>
 
                 <div className="session-controls">
-                  <button className="btn btn-secondary" onClick={reset} disabled={status === "idle"}>
+                  <button className="btn btn-secondary" onClick={handleReset} disabled={status === "idle"}>
                     Reset
                   </button>
                   <button
@@ -607,7 +719,7 @@ function App() {
               <section className="history-task-summary">
                 <div className="history-section-label">Today's tasks</div>
                 {todayTaskSummaries.length === 0 ? (
-                  <div className="history-task-summary-empty">No completed tasks today.</div>
+                  <div className="history-task-summary-empty">No sessions today.</div>
                 ) : (
                   <div className="history-task-grid">
                     {todayTaskSummaries.map((task) => (
@@ -630,8 +742,8 @@ function App() {
                 <div className="history-list">
                   {history.length === 0 ? (
                     <div className="history-placeholder">
-                      <h2>No completed sessions yet</h2>
-                      <p>Completed focus sessions will appear here.</p>
+                      <h2>No sessions yet</h2>
+                      <p>Started focus sessions will appear here once they run for more than one second.</p>
                     </div>
                   ) : groupedHistory.map((group) => (
                     <section className="history-day-group" key={group.date}>
@@ -660,7 +772,7 @@ function App() {
                                 )}
                               </div>
                               <div className="history-duration" title="Focused time">
-                                <span className="history-duration-label">Focused</span>
+                                <span className="history-duration-label">{entry.isLive ? "Live" : "Focused"}</span>
                                 {formatHistoryDuration(recordFocusedMs(entry))}
                               </div>
                               <div className="history-total" title="Session start and end time">
@@ -682,7 +794,9 @@ function App() {
                               )}
                             </div>
                             <div className="history-details">
+                              <span>Status: {entry.isLive ? "Live" : "Completed"}</span>
                               <span>Mode: {entry.mode === "countdown" ? "Countdown" : "Counter"}</span>
+                              <span>Goal: {formatHistoryDuration(entry.goalMs ?? entry.durationMs)}</span>
                               <span>Total: {formatHistoryDuration(recordTotalMs(entry))}</span>
                               <span>Active: {formatHistoryDuration(recordActiveMs(entry))}</span>
                               <span>Focused: {formatHistoryDuration(recordFocusedMs(entry))}</span>
