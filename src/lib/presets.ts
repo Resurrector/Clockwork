@@ -13,7 +13,7 @@ export function createPresetId(): string {
 /** Defaults used the very first time the app runs. */
 function defaultPresets(): Preset[] {
   return [
-    { id: createPresetId(), label: "Focus", seconds: 25 * 60 },
+    { id: createPresetId(), label: "Focus", seconds: 20 * 60 },
     { id: createPresetId(), label: "Short Break", seconds: 5 * 60 },
     { id: createPresetId(), label: "Deep Work", seconds: 50 * 60 },
   ];

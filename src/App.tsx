@@ -1,5 +1,5 @@
 import "./App.css";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 import { useTimer } from "./hooks/useCountdown";
@@ -12,7 +12,7 @@ import { TaskSelector } from "./components/TaskSelector";
 import { TaskView } from "./components/TaskView";
 import { loadTasks, saveTasks } from "./lib/tasks";
 import { createSession, createSessionId, loadHistory, saveHistory } from "./lib/history";
-import type { AppView, SessionRecord, Task, TimerMode } from "./types";
+import type { AppView, SessionRecord, Task, TaskGoal, TimerMode } from "./types";
 
 const RING_RADIUS = 80;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
@@ -26,9 +26,20 @@ const recordTotalMs = (entry: SessionRecord) => entry.totalMs ?? entry.durationM
 const recordCompensatedMs = (entry: SessionRecord) => entry.compensatedMs ?? entry.distractedMs ?? 0;
 const recordActiveMs = (entry: SessionRecord) => entry.activeMs ?? 0;
 const recordFocusedMs = (entry: SessionRecord) => entry.focusedMs ?? 0;
-const normalizeTaskName = (name: string) => name.trim().toLocaleLowerCase();
 const sessionDate = (entry: SessionRecord) =>
   new Date(entry.startedAt ?? entry.completedAt).toDateString();
+
+const dayStart = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+const goalPeriod = (goal: TaskGoal, now: Date) => {
+  const start = dayStart(new Date(`${goal.startDate}T00:00:00`));
+  const lengthDays = goal.duration === "daily" ? 1 : goal.duration === "weekly" ? 7 : goal.customDays ?? 1;
+  const elapsedDays = Math.floor((dayStart(now).getTime() - start.getTime()) / 86_400_000);
+  if (goal.type === "once" && elapsedDays >= lengthDays) return null;
+  const offset = goal.type === "repeating" ? Math.max(0, Math.floor(elapsedDays / lengthDays)) * lengthDays : 0;
+  const periodStart = new Date(start.getTime() + offset * 86_400_000);
+  const periodEnd = new Date(periodStart.getTime() + lengthDays * 86_400_000);
+  return { start: periodStart, end: periodEnd, lengthDays };
+};
 
 function App() {
   const appWindow = getCurrentWindow();
@@ -117,6 +128,7 @@ function App() {
     resume,
     reset,
     adjust,
+    updateGoal,
     load,
     setMode,
   } = useTimer();
@@ -132,9 +144,14 @@ function App() {
   const [isGoalPanelOpen, setIsGoalPanelOpen] = useState(false);
   const [goalMinutes, setGoalMinutes] = useState(0);
   const [goalSeconds, setGoalSeconds] = useState(0);
+  const [goalHours, setGoalHours] = useState(0);
   const [adjustmentRevision, setAdjustmentRevision] = useState(0);
   const [editingHistoryId, setEditingHistoryId] = useState<string | null>(null);
   const [editingHistoryName, setEditingHistoryName] = useState("");
+  const [isHistoryOpen, setIsHistoryOpen] = useState(true);
+  const [collapsedHistoryDays, setCollapsedHistoryDays] = useState<Set<string>>(
+    () => new Set(history.filter((entry) => sessionDate(entry) !== new Date().toDateString()).map(sessionDate)),
+  );
   const sessionRef = useRef<{
     id: string;
     taskId: string;
@@ -189,25 +206,40 @@ function App() {
       sessionRef.current = null;
     }
     previousStatusRef.current = status;
-  }, [activeElapsedMs, adjustmentRevision, endedAtMs, startedAtMs, status]);
+  }, [activeElapsedMs, adjustmentRevision, durationMs, endedAtMs, startedAtMs, status]);
 
   const today = new Date().toDateString();
   const todayHistory = history.filter((entry) => sessionDate(entry) === today);
   const todayTotalMs = todayHistory.reduce((total, entry) => total + recordFocusedMs(entry), 0);
-  const todayTaskSummaries = useMemo(() => {
-    const summaries = new Map<string, { name: string; focusedMs: number; sessions: number }>();
-    for (const entry of todayHistory) {
-      const key = normalizeTaskName(entry.taskName);
-      const current = summaries.get(key);
-      if (current) {
-        current.focusedMs += recordFocusedMs(entry);
-        current.sessions += 1;
-      } else {
-        summaries.set(key, { name: entry.taskName.trim(), focusedMs: recordFocusedMs(entry), sessions: 1 });
-      }
+  const taskStatistics = useMemo(() => {
+    const now = new Date();
+    const sessionsByTask = new Map<string, SessionRecord[]>();
+    for (const entry of history) {
+      const list = sessionsByTask.get(entry.taskId) ?? [];
+      list.push(entry);
+      sessionsByTask.set(entry.taskId, list);
     }
-    return [...summaries.values()].sort((left, right) => right.focusedMs - left.focusedMs);
-  }, [todayHistory]);
+    return tasks
+      .map((task) => {
+        const period = task.goal ? goalPeriod(task.goal, now) : { start: dayStart(now), end: new Date(dayStart(now).getTime() + 86_400_000), lengthDays: 1 };
+        if (!period) return null;
+        const entries = (sessionsByTask.get(task.id) ?? []).filter((entry) => {
+          const at = new Date(entry.startedAt ?? entry.completedAt);
+          return at >= period.start && at < period.end;
+        });
+        if (!task.goal && entries.length === 0) return null;
+        const focusedMs = entries.reduce((total, entry) => total + recordFocusedMs(entry), 0);
+        return {
+          task,
+          focusedMs,
+          sessions: entries.length,
+          percentage: task.goal ? Math.min(100, (focusedMs / task.goal.amountMs) * 100) : null,
+          period,
+        };
+      })
+      .filter((value): value is NonNullable<typeof value> => value !== null)
+      .sort((left, right) => right.focusedMs - left.focusedMs);
+  }, [history, tasks, today]);
   const groupedHistory = useMemo(() => {
     const groups: Array<{ date: string; entries: SessionRecord[] }> = [];
     const groupsByDate = new Map<string, { date: string; entries: SessionRecord[] }>();
@@ -240,13 +272,15 @@ function App() {
     }
   }, [selectedTaskId, tasks]);
 
-  const handleAddTask = (name: string) => {
+  const handleAddTask = (name: string, goal?: Task["goal"], presetTimeMs?: number) => {
     const trimmed = name.trim();
     if (!trimmed) return;
 
     const nextTask: Task = {
       id: typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `task_${Date.now().toString(36)}`,
       name: trimmed,
+      ...(goal ? { goal } : {}),
+      ...(presetTimeMs ? { presetTimeMs } : {}),
       pinned: false,
       archived: false,
       createdAt: new Date().toISOString(),
@@ -256,13 +290,32 @@ function App() {
     setSelectedTaskId(nextTask.id);
   };
 
+  const handleSelectTask = (taskId: string) => {
+    setSelectedTaskId(taskId);
+    if (status === "idle") {
+      const presetTimeMs = tasks.find((task) => task.id === taskId)?.presetTimeMs;
+      if (presetTimeMs) load(presetTimeMs);
+    }
+  };
+
   const handleUpdateTask = (
     taskId: string,
-    changes: Partial<Pick<Task, "name" | "pinned" | "archived">>,
+    changes: Partial<Pick<Task, "name" | "goal" | "presetTimeMs" | "pinned" | "archived">>,
   ) => {
+    const previousTask = tasks.find((task) => task.id === taskId);
     setTasks((previous) =>
       previous.map((task) => (task.id === taskId ? { ...task, ...changes } : task)),
     );
+    if (changes.name && changes.name !== previousTask?.name) {
+      setHistory((previous) =>
+        previous.map((entry) =>
+          entry.taskId === taskId ? { ...entry, taskName: changes.name! } : entry,
+        ),
+      );
+      if (sessionRef.current?.taskId === taskId) {
+        sessionRef.current.taskName = changes.name;
+      }
+    }
   };
 
   const handleDeleteTask = (taskId: string) => {
@@ -370,17 +423,24 @@ function App() {
     reset();
   };
   const openGoalPanel = () => {
-    if (status === "running" || status === "paused") return;
-    setGoalMinutes(Math.floor(durationMs / 60_000));
+    setGoalHours(Math.floor(durationMs / 3_600_000));
+    setGoalMinutes(Math.floor((durationMs % 3_600_000) / 60_000));
     setGoalSeconds(Math.floor((durationMs % 60_000) / 1000));
     setIsGoalPanelOpen(true);
   };
   const applyGoal = () => {
     const nextGoalMs = Math.min(
-      Math.max(0, goalMinutes * 60_000 + goalSeconds * 1000),
+      Math.max(0, goalHours * 3_600_000 + goalMinutes * 60_000 + goalSeconds * 1000),
       24 * 60 * 60 * 1000,
     );
-    load(nextGoalMs);
+    if (status === "running" || status === "paused") {
+      updateGoal(nextGoalMs);
+      if (sessionRef.current) {
+        sessionRef.current.goalMs = nextGoalMs;
+      }
+    } else {
+      load(nextGoalMs);
+    }
     setIsGoalPanelOpen(false);
   };
   const ringProgress =
@@ -438,7 +498,7 @@ function App() {
             <path d="M12 8V12L14.5 14.5" stroke="#96c2ffcc" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             <path d="M7 3.33782C8.47087 2.48697 10.1786 2 12 2C17.5228 2 22 6.47715 22 12C22 17.5228 17.5228 22 12 22C6.47715 22 2 17.5228 2 12C2 10.1786 2.48697 8.47087 3.33782 7" stroke="#96c2ffcc" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
-          <span className="titlebar-title">ClockWork</span>
+          <span className="titlebar-title">Clockwork</span>
         </div>
 
         <div className="titlebar-controls">
@@ -469,23 +529,32 @@ function App() {
             <button
               type="button"
               className="brand-mark"
-              onClick={() => setIsSidebarExpanded((expanded) => !expanded)}
+              onClick={() => {
+                setIsGoalPanelOpen(false);
+                setIsSidebarExpanded((expanded) => !expanded);
+              }}
               aria-label={isSidebarExpanded ? "Collapse sidebar" : "Expand sidebar"}
               aria-expanded={isSidebarExpanded}
             >
-              {isSidebarExpanded ? "CW" : (
+              {isSidebarExpanded ? "" : (
                 <svg className="sidebar-toggle-icon" viewBox="0 0 20 20" aria-hidden="true">
                   <path d="M3 5h14M3 10h14M3 15h14" />
                 </svg>
               )}
             </button>
             <div>
-              <div className="brand-name">ClockWork</div>
+              <div className="brand-name">Clockwork</div>
               <div className="brand-subtitle">Focus</div>
             </div>
           </div>
 
-          <AppNavigation activeView={activeView} onChange={setActiveView} />
+          <AppNavigation
+            activeView={activeView}
+            onChange={(view) => {
+              setIsGoalPanelOpen(false);
+              setActiveView(view);
+            }}
+          />
 
           <div className="sidebar-summary">
             <div className="summary-label">Today</div>
@@ -528,7 +597,7 @@ function App() {
                       }
                     }}
                     role="button"
-                    tabIndex={status === "running" || status === "paused" ? -1 : 0}
+                    tabIndex={0}
                     aria-label="Set time goal"
                   >
                     <svg className="timer-ring" viewBox="0 0 180 180" aria-hidden="true">
@@ -570,8 +639,10 @@ function App() {
                           </button>
                         </div>
                         <WheelPicker
+                          hours={goalHours}
                           minutes={goalMinutes}
                           seconds={goalSeconds}
+                          onHoursChange={setGoalHours}
                           onMinutesChange={setGoalMinutes}
                           onSecondsChange={setGoalSeconds}
                         />
@@ -616,7 +687,7 @@ function App() {
                         <TaskSelector
                           tasks={tasks}
                           selectedTaskId={selectedTaskId}
-                          onSelectTask={setSelectedTaskId}
+                          onSelectTask={handleSelectTask}
                         />
                       </div>
                     )}
@@ -699,7 +770,7 @@ function App() {
               <TaskView
                 tasks={tasks}
                 selectedTaskId={selectedTaskId}
-                onSelectTask={setSelectedTaskId}
+                onSelectTask={handleSelectTask}
                 onAddTask={handleAddTask}
                 onUpdateTask={handleUpdateTask}
                 onDeleteTask={handleDeleteTask}
@@ -718,15 +789,15 @@ function App() {
 
               <section className="history-task-summary">
                 <div className="history-section-label">Today's tasks</div>
-                {todayTaskSummaries.length === 0 ? (
-                  <div className="history-task-summary-empty">No sessions today.</div>
+                {taskStatistics.length === 0 ? (
+                  <div className="history-task-summary-empty">No active task goals or sessions in the current period.</div>
                 ) : (
-                  <div className="history-task-grid">
-                    {todayTaskSummaries.map((task) => (
-                      <div className="history-task-card glass-card" key={normalizeTaskName(task.name)}>
-                        <span className="history-task-card-name">{task.name}</span>
-                        <strong>{formatHistoryDuration(task.focusedMs)}</strong>
-                        <small>{task.sessions} session{task.sessions === 1 ? "" : "s"}</small>
+                  <div className="task-statistics-list">
+                    {taskStatistics.map((statistic) => (
+                      <div className="task-statistics-row" key={statistic.task.id}>
+                        <span className="task-statistics-indicator" style={{ "--goal-progress": `${statistic.percentage ?? 0}%` } as CSSProperties} />
+                        <div className="task-statistics-main"><strong>{statistic.task.name}</strong><span>{formatHistoryDuration(statistic.focusedMs)} focused · {statistic.sessions} session{statistic.sessions === 1 ? "" : "s"}</span></div>
+                        <div className="task-statistics-goal"><span>{statistic.task.goal ? `${formatHistoryDuration(statistic.task.goal.amountMs)} / ${statistic.task.goal.duration === "custom" ? `${statistic.task.goal.customDays} days` : statistic.task.goal.duration}` : "No goal"}</span>{statistic.percentage !== null && <strong>{Math.round(statistic.percentage)}%</strong>}</div>
                       </div>
                     ))}
                   </div>
@@ -734,12 +805,12 @@ function App() {
               </section>
 
               <section className="glass-card history-panel">
-                <div className="history-panel-header">
+                <button type="button" className="history-panel-header history-panel-toggle" onClick={() => setIsHistoryOpen((open) => !open)} aria-expanded={isHistoryOpen}>
                   <span className="field-label">Recent sessions</span>
-                  <span className="history-count">{history.length} total</span>
-                </div>
+                  <span className="history-count">{history.length} total · {isHistoryOpen ? "Collapse" : "Expand"}</span>
+                </button>
 
-                <div className="history-list">
+                {isHistoryOpen && <div className="history-list">
                   {history.length === 0 ? (
                     <div className="history-placeholder">
                       <h2>No sessions yet</h2>
@@ -747,10 +818,11 @@ function App() {
                     </div>
                   ) : groupedHistory.map((group) => (
                     <section className="history-day-group" key={group.date}>
-                      <div className="history-day-divider">
+                      <button type="button" className="history-day-divider history-day-toggle" onClick={() => setCollapsedHistoryDays((current) => { const next = new Set(current); if (next.has(group.date)) next.delete(group.date); else next.add(group.date); return next; })} aria-expanded={!collapsedHistoryDays.has(group.date)}>
                         <span>{new Date(group.entries[0].startedAt ?? group.entries[0].completedAt).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}</span>
-                      </div>
-                      <div className="history-day-list">
+                        <span>{collapsedHistoryDays.has(group.date) ? "Expand" : "Collapse"}</span>
+                      </button>
+                      {!collapsedHistoryDays.has(group.date) && <div className="history-day-list">
                         {group.entries.map((entry) => (
                           <details className="history-entry" key={entry.id}>
                             <summary className="history-row">
@@ -808,10 +880,10 @@ function App() {
                             </div>
                           </details>
                         ))}
-                      </div>
+                      </div>}
                     </section>
                   ))}
-                </div>
+                </div>}
               </section>
             </div>
           )}

@@ -3,8 +3,6 @@ import type { Preset } from "../types";
 import { createPresetId, loadPresets, savePresets } from "../lib/presets";
 import { formatDuration } from "../lib/time";
 
-const MAX_MINUTES = 1440; // 24 h
-
 interface PresetManagerProps {
   onLoad: (durationMs: number) => void;
 }
@@ -13,6 +11,7 @@ type FormState = {
   /** Preset being edited, or null when adding a new one. */
   editingId: string | null;
   name: string;
+  hours: string;
   minutes: string;
   seconds: string;
 };
@@ -35,7 +34,7 @@ export function PresetManager({ onLoad }: PresetManagerProps) {
   const openAddForm = () => {
     setError("");
     setConfirmDeleteId(null);
-    setForm({ editingId: null, name: "", minutes: "25", seconds: "0" });
+    setForm({ editingId: null, name: "", hours: "0", minutes: "25", seconds: "0" });
   };
 
   const openEditForm = (preset: Preset) => {
@@ -44,7 +43,8 @@ export function PresetManager({ onLoad }: PresetManagerProps) {
     setForm({
       editingId: preset.id,
       name: preset.label,
-      minutes: String(Math.floor(preset.seconds / 60)),
+      hours: String(Math.floor(preset.seconds / 3600)),
+      minutes: String(Math.floor((preset.seconds % 3600) / 60)),
       seconds: String(preset.seconds % 60),
     });
   };
@@ -61,20 +61,24 @@ export function PresetManager({ onLoad }: PresetManagerProps) {
       setError("Please enter a preset name.");
       return;
     }
+    const hours = Number(form.hours);
     const minutes = Number(form.minutes);
     const seconds = Number(form.seconds);
     if (
+      !Number.isInteger(hours) ||
       !Number.isInteger(minutes) ||
       !Number.isInteger(seconds) ||
+      hours < 0 ||
+      hours > 23 ||
       minutes < 0 ||
-      minutes > MAX_MINUTES ||
+      minutes > 59 ||
       seconds < 0 ||
       seconds > 59
     ) {
-      setError("Minutes must be 0-1440 and seconds 0-59.");
+      setError("Hours must be 0-23, minutes 0-59, and seconds 0-59.");
       return;
     }
-    const totalSeconds = minutes * 60 + seconds;
+    const totalSeconds = hours * 3600 + minutes * 60 + seconds;
     if (totalSeconds <= 0) {
       setError("Duration must be greater than zero.");
       return;
@@ -135,11 +139,21 @@ export function PresetManager({ onLoad }: PresetManagerProps) {
           />
           <div className="preset-form-row">
             <label className="preset-field">
+              <span>Hours</span>
+              <input
+                type="number"
+                min={0}
+                max={23}
+                value={form.hours}
+                onChange={(e) => setForm({ ...form, hours: e.target.value })}
+              />
+            </label>
+            <label className="preset-field">
               <span>Minutes</span>
               <input
                 type="number"
                 min={0}
-                max={MAX_MINUTES}
+                max={59}
                 value={form.minutes}
                 onChange={(e) => setForm({ ...form, minutes: e.target.value })}
               />

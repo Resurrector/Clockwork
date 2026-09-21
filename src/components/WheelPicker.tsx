@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 
 const ROW_HEIGHT = 40;
-const VALUES = 60; // minutes and seconds both wrap 00-59
+const VALUES = 60;
 
-const wrap = (value: number) => ((value % VALUES) + VALUES) % VALUES;
+const wrap = (value: number, values = VALUES) => ((value % values) + values) % values;
 const format = (value: number) => String(value).padStart(2, "0");
 
 interface WheelColumnProps {
   label: string;
   index: number;
   onChange: (index: number) => void;
+  values?: number;
 }
 
 /**
@@ -20,7 +21,7 @@ interface WheelColumnProps {
 /** Max pointer travel (px) for a press to count as a tap, not a drag. */
 const CLICK_SLOP_PX = 6;
 
-function WheelColumn({ label, index, onChange }: WheelColumnProps) {
+function WheelColumn({ label, index, onChange, values = VALUES }: WheelColumnProps) {
   const rowsRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{
     pointerId: number;
@@ -35,7 +36,7 @@ function WheelColumn({ label, index, onChange }: WheelColumnProps) {
 
   const change = (delta: number) => {
     setDir(delta);
-    onChange(wrap(index + delta));
+    onChange(wrap(index + delta, values));
   };
 
   // Non-passive wheel listener so we can preventDefault page scrolling.
@@ -104,8 +105,8 @@ function WheelColumn({ label, index, onChange }: WheelColumnProps) {
     }
   };
 
-  const prev = wrap(index - 1);
-  const next = wrap(index + 1);
+  const prev = wrap(index - 1, values);
+  const next = wrap(index + 1, values);
 
   return (
     <div className="wheel-column">
@@ -120,7 +121,7 @@ function WheelColumn({ label, index, onChange }: WheelColumnProps) {
         aria-valuenow={index}
         aria-valuetext={format(index)}
         aria-valuemin={0}
-        aria-valuemax={59}
+        aria-valuemax={values - 1}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={endDrag}
@@ -157,22 +158,37 @@ function WheelColumn({ label, index, onChange }: WheelColumnProps) {
 }
 
 interface WheelPickerProps {
+  hours?: number;
   minutes: number;
   seconds: number;
+  onHoursChange?: (hours: number) => void;
   onMinutesChange: (minutes: number) => void;
   onSecondsChange: (seconds: number) => void;
 }
 
 /** Compact two-column (minutes / seconds) wheel picker, no scrolling. */
 export function WheelPicker({
+  hours,
   minutes,
   seconds,
+  onHoursChange,
   onMinutesChange,
   onSecondsChange,
 }: WheelPickerProps) {
   return (
     <div className="wheel-picker">
       <div className="wheel-band" aria-hidden="true" />
+      {hours !== undefined && onHoursChange && (
+        <>
+          <WheelColumn
+            label="hr"
+            index={hours}
+            values={24}
+            onChange={onHoursChange}
+          />
+          <div className="wheel-colon">:</div>
+        </>
+      )}
       <WheelColumn
         label="min"
         index={minutes}

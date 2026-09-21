@@ -248,6 +248,49 @@ export function useTimer(initialDurationMs = 5 * 60 * 1000) {
     }
   }, []);
 
+  const updateGoal = useCallback((ms: number) => {
+    const nextDuration = Math.min(Math.max(0, ms), MAX_DURATION_MS);
+    const previousDuration = durationRef.current;
+    durationRef.current = nextDuration;
+    setDurationMs(nextDuration);
+
+    if (modeRef.current === "counter") {
+      if (elapsedRef.current >= nextDuration) {
+        elapsedRef.current = nextDuration;
+        setElapsedMs(nextDuration);
+        if (activeStartedAtRef.current !== null) {
+          const activeElapsed = Date.now() - activeStartedAtRef.current;
+          activeElapsedRef.current = activeElapsed;
+          setActiveElapsedMs(activeElapsed);
+        }
+        startedAtRef.current = null;
+        activeStartedAtRef.current = null;
+        setStatus("finished");
+        setEndedAtMs(Date.now());
+      }
+      return;
+    }
+
+    const elapsed = Math.max(0, previousDuration - remainingRef.current);
+    const nextRemaining = Math.max(0, nextDuration - elapsed);
+    remainingRef.current = nextRemaining;
+    setRemainingMs(nextRemaining);
+
+    if (nextRemaining === 0) {
+      if (activeStartedAtRef.current !== null) {
+        const activeElapsed = Date.now() - activeStartedAtRef.current;
+        activeElapsedRef.current = activeElapsed;
+        setActiveElapsedMs(activeElapsed);
+      }
+      endsAtRef.current = null;
+      activeStartedAtRef.current = null;
+      setStatus("finished");
+      setEndedAtMs(Date.now());
+    } else if (statusRef.current === "running") {
+      endsAtRef.current = Date.now() + nextRemaining;
+    }
+  }, []);
+
   useEffect(() => {
     if (status !== "running") return;
 
@@ -336,6 +379,7 @@ export function useTimer(initialDurationMs = 5 * 60 * 1000) {
     resume,
     reset,
     adjust,
+    updateGoal,
     load,
   };
 }

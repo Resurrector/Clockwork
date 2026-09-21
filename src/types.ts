@@ -7,9 +7,19 @@ export type Preset = {
 export type Task = {
   id: string;
   name: string;
+  goal?: TaskGoal;
+  presetTimeMs?: number;
   pinned: boolean;
   archived: boolean;
   createdAt: string;
+};
+
+export type TaskGoal = {
+  type: "repeating" | "once";
+  duration: "daily" | "weekly" | "custom";
+  customDays?: number;
+  startDate: string;
+  amountMs: number;
 };
 
 export type AppView = "timer" | "tasks" | "history";
