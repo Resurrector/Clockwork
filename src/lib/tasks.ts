@@ -40,7 +40,6 @@ function isValidTask(value: unknown): value is Task {
     (task.goal === undefined || isGoal(task.goal)) &&
     (task.presetTimeMs === undefined ||
       (typeof task.presetTimeMs === "number" && Number.isFinite(task.presetTimeMs) && task.presetTimeMs > 0)) &&
-    typeof task.pinned === "boolean" &&
     typeof task.archived === "boolean" &&
     typeof task.createdAt === "string"
   );
@@ -71,7 +70,6 @@ function normalizeTask(value: Record<string, unknown>): Task {
     ...(typeof value.presetTimeMs === "number" && value.presetTimeMs > 0
       ? { presetTimeMs: value.presetTimeMs }
       : {}),
-    pinned: value.pinned as boolean,
     archived: value.archived as boolean,
     createdAt: value.createdAt as string,
   };
@@ -91,7 +89,6 @@ export function loadTasks(): Task[] {
           typeof value.id === "string" &&
           typeof value.name === "string" &&
           value.name.trim().length > 0 &&
-          typeof value.pinned === "boolean" &&
           typeof value.archived === "boolean" &&
           typeof value.createdAt === "string"
         );

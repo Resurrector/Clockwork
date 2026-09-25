@@ -1,6 +1,6 @@
 [package]
 name = "Clockwork"
-version = "1.0.6"
+version = "1.0.7"
 description = "timer and clock application"
 authors = ["Resurrector"]
 edition = "2021"

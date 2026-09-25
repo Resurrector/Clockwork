@@ -1,5 +1,11 @@
 import "./App.css";
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 import { useTimer } from "./hooks/useCountdown";
@@ -11,8 +17,19 @@ import { AppNavigation } from "./components/AppNavigation";
 import { TaskSelector } from "./components/TaskSelector";
 import { TaskView } from "./components/TaskView";
 import { loadTasks, saveTasks } from "./lib/tasks";
-import { createSession, createSessionId, loadHistory, saveHistory } from "./lib/history";
-import type { AppView, SessionRecord, Task, TaskGoal, TimerMode } from "./types";
+import {
+  createSession,
+  createSessionId,
+  loadHistory,
+  saveHistory,
+} from "./lib/history";
+import type {
+  AppView,
+  SessionRecord,
+  Task,
+  TaskGoal,
+  TimerMode,
+} from "./types";
 
 const RING_RADIUS = 80;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
@@ -22,20 +39,33 @@ const MIN_WINDOW_HEIGHT = 640;
 const showSidebar = import.meta.env.VITE_SHOW_SIDEBAR !== "false";
 const showTaskSelector = import.meta.env.VITE_SHOW_TASK_SELECTOR !== "false";
 
-const recordTotalMs = (entry: SessionRecord) => entry.totalMs ?? entry.durationMs;
-const recordCompensatedMs = (entry: SessionRecord) => entry.compensatedMs ?? entry.distractedMs ?? 0;
+const recordTotalMs = (entry: SessionRecord) =>
+  entry.totalMs ?? entry.durationMs;
+const recordCompensatedMs = (entry: SessionRecord) =>
+  entry.compensatedMs ?? entry.distractedMs ?? 0;
 const recordActiveMs = (entry: SessionRecord) => entry.activeMs ?? 0;
 const recordFocusedMs = (entry: SessionRecord) => entry.focusedMs ?? 0;
 const sessionDate = (entry: SessionRecord) =>
   new Date(entry.startedAt ?? entry.completedAt).toDateString();
 
-const dayStart = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+const dayStart = (date: Date) =>
+  new Date(date.getFullYear(), date.getMonth(), date.getDate());
 const goalPeriod = (goal: TaskGoal, now: Date) => {
   const start = dayStart(new Date(`${goal.startDate}T00:00:00`));
-  const lengthDays = goal.duration === "daily" ? 1 : goal.duration === "weekly" ? 7 : goal.customDays ?? 1;
-  const elapsedDays = Math.floor((dayStart(now).getTime() - start.getTime()) / 86_400_000);
+  const lengthDays =
+    goal.duration === "daily"
+      ? 1
+      : goal.duration === "weekly"
+        ? 7
+        : (goal.customDays ?? 1);
+  const elapsedDays = Math.floor(
+    (dayStart(now).getTime() - start.getTime()) / 86_400_000,
+  );
   if (goal.type === "once" && elapsedDays >= lengthDays) return null;
-  const offset = goal.type === "repeating" ? Math.max(0, Math.floor(elapsedDays / lengthDays)) * lengthDays : 0;
+  const offset =
+    goal.type === "repeating"
+      ? Math.max(0, Math.floor(elapsedDays / lengthDays)) * lengthDays
+      : 0;
   const periodStart = new Date(start.getTime() + offset * 86_400_000);
   const periodEnd = new Date(periodStart.getTime() + lengthDays * 86_400_000);
   return { start: periodStart, end: periodEnd, lengthDays };
@@ -81,10 +111,7 @@ function App() {
           }
           if (state.position) {
             await appWindow.setPosition(
-              new PhysicalPosition(
-                state.position.x,
-                state.position.y,
-              ),
+              new PhysicalPosition(state.position.x, state.position.y),
             );
           }
         } catch {
@@ -138,6 +165,7 @@ function App() {
   const [tasks, setTasks] = useState<Task[]>(() => loadTasks());
   const [history, setHistory] = useState<SessionRecord[]>(() => loadHistory());
   const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [taskDismissSignal, setTaskDismissSignal] = useState(0);
   const [selection, setSelection] = useState<"20s" | "2m" | "custom">("20s");
   const [customMinutes, setCustomMinutes] = useState(1);
   const [customSeconds, setCustomSeconds] = useState(0);
@@ -148,9 +176,17 @@ function App() {
   const [adjustmentRevision, setAdjustmentRevision] = useState(0);
   const [editingHistoryId, setEditingHistoryId] = useState<string | null>(null);
   const [editingHistoryName, setEditingHistoryName] = useState("");
+  const [deletingHistoryId, setDeletingHistoryId] = useState<string | null>(
+    null,
+  );
   const [isHistoryOpen, setIsHistoryOpen] = useState(true);
   const [collapsedHistoryDays, setCollapsedHistoryDays] = useState<Set<string>>(
-    () => new Set(history.filter((entry) => sessionDate(entry) !== new Date().toDateString()).map(sessionDate)),
+    () =>
+      new Set(
+        history
+          .filter((entry) => sessionDate(entry) !== new Date().toDateString())
+          .map(sessionDate),
+      ),
   );
   const sessionRef = useRef<{
     id: string;
@@ -174,28 +210,37 @@ function App() {
     const session = sessionRef.current;
     const startedAt = startedAtMs;
     if (session && startedAt !== null && activeElapsedMs > 1000) {
-      const endedAt = status === "finished" ? endedAtMs ?? Date.now() : Date.now();
+      const endedAt =
+        status === "finished" ? (endedAtMs ?? Date.now()) : Date.now();
       const totalMs = Math.max(0, endedAt - startedAt);
-      const record = createSession(session.taskId, session.taskName, totalMs, session.mode, {
-        id: session.id,
+      const record = createSession(
+        session.taskId,
+        session.taskName,
         totalMs,
-        goalMs: session.goalMs,
-        activeMs: Math.max(0, activeElapsedMs),
-        compensatedMs:
-          session.mode === "countdown"
-            ? Math.max(0, session.adjustmentTotalMs)
-            : Math.max(0, -session.adjustmentTotalMs),
-        distractedMs:
-          session.mode === "countdown"
-            ? Math.max(0, session.adjustmentTotalMs)
-            : Math.max(0, -session.adjustmentTotalMs),
-        focusedMs: session.goalMs,
-        startedAt: new Date(startedAt).toISOString(),
-        endedAt: new Date(endedAt).toISOString(),
-        isLive: status !== "finished",
-      });
+        session.mode,
+        {
+          id: session.id,
+          totalMs,
+          goalMs: session.goalMs,
+          activeMs: Math.max(0, activeElapsedMs),
+          compensatedMs:
+            session.mode === "countdown"
+              ? Math.max(0, session.adjustmentTotalMs)
+              : Math.max(0, -session.adjustmentTotalMs),
+          distractedMs:
+            session.mode === "countdown"
+              ? Math.max(0, session.adjustmentTotalMs)
+              : Math.max(0, -session.adjustmentTotalMs),
+          focusedMs: session.goalMs,
+          startedAt: new Date(startedAt).toISOString(),
+          endedAt: new Date(endedAt).toISOString(),
+          isLive: status !== "finished",
+        },
+      );
       setHistory((previous) => {
-        const existingIndex = previous.findIndex((entry) => entry.id === session.id);
+        const existingIndex = previous.findIndex(
+          (entry) => entry.id === session.id,
+        );
         if (existingIndex === -1) return [record, ...previous];
         const next = [...previous];
         next[existingIndex] = record;
@@ -206,11 +251,21 @@ function App() {
       sessionRef.current = null;
     }
     previousStatusRef.current = status;
-  }, [activeElapsedMs, adjustmentRevision, durationMs, endedAtMs, startedAtMs, status]);
+  }, [
+    activeElapsedMs,
+    adjustmentRevision,
+    durationMs,
+    endedAtMs,
+    startedAtMs,
+    status,
+  ]);
 
   const today = new Date().toDateString();
   const todayHistory = history.filter((entry) => sessionDate(entry) === today);
-  const todayTotalMs = todayHistory.reduce((total, entry) => total + recordFocusedMs(entry), 0);
+  const todayTotalMs = todayHistory.reduce(
+    (total, entry) => total + recordFocusedMs(entry),
+    0,
+  );
   const taskStatistics = useMemo(() => {
     const now = new Date();
     const sessionsByTask = new Map<string, SessionRecord[]>();
@@ -221,19 +276,30 @@ function App() {
     }
     return tasks
       .map((task) => {
-        const period = task.goal ? goalPeriod(task.goal, now) : { start: dayStart(now), end: new Date(dayStart(now).getTime() + 86_400_000), lengthDays: 1 };
+        const period = task.goal
+          ? goalPeriod(task.goal, now)
+          : {
+              start: dayStart(now),
+              end: new Date(dayStart(now).getTime() + 86_400_000),
+              lengthDays: 1,
+            };
         if (!period) return null;
         const entries = (sessionsByTask.get(task.id) ?? []).filter((entry) => {
           const at = new Date(entry.startedAt ?? entry.completedAt);
           return at >= period.start && at < period.end;
         });
         if (!task.goal && entries.length === 0) return null;
-        const focusedMs = entries.reduce((total, entry) => total + recordFocusedMs(entry), 0);
+        const focusedMs = entries.reduce(
+          (total, entry) => total + recordFocusedMs(entry),
+          0,
+        );
         return {
           task,
           focusedMs,
           sessions: entries.length,
-          percentage: task.goal ? Math.min(100, (focusedMs / task.goal.amountMs) * 100) : null,
+          percentage: task.goal
+            ? Math.min(100, (focusedMs / task.goal.amountMs) * 100)
+            : null,
           period,
         };
       })
@@ -242,7 +308,10 @@ function App() {
   }, [history, tasks, today]);
   const groupedHistory = useMemo(() => {
     const groups: Array<{ date: string; entries: SessionRecord[] }> = [];
-    const groupsByDate = new Map<string, { date: string; entries: SessionRecord[] }>();
+    const groupsByDate = new Map<
+      string,
+      { date: string; entries: SessionRecord[] }
+    >();
     for (const entry of history.slice(0, 20)) {
       const date = sessionDate(entry);
       const current = groupsByDate.get(date);
@@ -272,16 +341,22 @@ function App() {
     }
   }, [selectedTaskId, tasks]);
 
-  const handleAddTask = (name: string, goal?: Task["goal"], presetTimeMs?: number) => {
+  const handleAddTask = (
+    name: string,
+    goal?: Task["goal"],
+    presetTimeMs?: number,
+  ) => {
     const trimmed = name.trim();
     if (!trimmed) return;
 
     const nextTask: Task = {
-      id: typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `task_${Date.now().toString(36)}`,
+      id:
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `task_${Date.now().toString(36)}`,
       name: trimmed,
       ...(goal ? { goal } : {}),
       ...(presetTimeMs ? { presetTimeMs } : {}),
-      pinned: false,
       archived: false,
       createdAt: new Date().toISOString(),
     };
@@ -293,23 +368,29 @@ function App() {
   const handleSelectTask = (taskId: string) => {
     setSelectedTaskId(taskId);
     if (status === "idle") {
-      const presetTimeMs = tasks.find((task) => task.id === taskId)?.presetTimeMs;
+      const presetTimeMs = tasks.find(
+        (task) => task.id === taskId,
+      )?.presetTimeMs;
       if (presetTimeMs) load(presetTimeMs);
     }
   };
 
   const handleUpdateTask = (
     taskId: string,
-    changes: Partial<Pick<Task, "name" | "goal" | "presetTimeMs" | "pinned" | "archived">>,
+    changes: Partial<Pick<Task, "name" | "goal" | "presetTimeMs" | "archived">>,
   ) => {
     const previousTask = tasks.find((task) => task.id === taskId);
     setTasks((previous) =>
-      previous.map((task) => (task.id === taskId ? { ...task, ...changes } : task)),
+      previous.map((task) =>
+        task.id === taskId ? { ...task, ...changes } : task,
+      ),
     );
     if (changes.name && changes.name !== previousTask?.name) {
       setHistory((previous) =>
         previous.map((entry) =>
-          entry.taskId === taskId ? { ...entry, taskName: changes.name! } : entry,
+          entry.taskId === taskId
+            ? { ...entry, taskName: changes.name! }
+            : entry,
         ),
       );
       if (sessionRef.current?.taskId === taskId) {
@@ -322,6 +403,16 @@ function App() {
     setTasks((previous) => previous.filter((task) => task.id !== taskId));
   };
 
+  const handleReorderTasks = (taskIds: string[]) => {
+    const byId = new Map(tasks.map((task) => [task.id, task]));
+    setTasks(
+      taskIds.flatMap((id) => {
+        const task = byId.get(id);
+        return task ? [task] : [];
+      }),
+    );
+  };
+
   const startHistoryEdit = (entry: SessionRecord) => {
     setEditingHistoryId(entry.id);
     setEditingHistoryName(entry.taskName);
@@ -331,15 +422,19 @@ function App() {
     const taskName = editingHistoryName.trim();
     if (!taskName) return;
     setHistory((previous) =>
-      previous.map((entry) => (entry.id === entryId ? { ...entry, taskName } : entry)),
+      previous.map((entry) =>
+        entry.id === entryId ? { ...entry, taskName } : entry,
+      ),
     );
     setEditingHistoryId(null);
     setEditingHistoryName("");
   };
 
   const deleteHistoryEntry = (entry: SessionRecord) => {
-    if (!window.confirm(`Delete the session for "${entry.taskName}"?`)) return;
-    setHistory((previous) => previous.filter((candidate) => candidate.id !== entry.id));
+    setHistory((previous) =>
+      previous.filter((candidate) => candidate.id !== entry.id),
+    );
+    setDeletingHistoryId(null);
     if (editingHistoryId === entry.id) {
       setEditingHistoryId(null);
       setEditingHistoryName("");
@@ -348,7 +443,11 @@ function App() {
 
   const customAmountMs = customMinutes * 60_000 + customSeconds * 1000;
   const adjustmentMs =
-    selection === "20s" ? 20_000 : selection === "2m" ? 120_000 : customAmountMs;
+    selection === "20s"
+      ? 20_000
+      : selection === "2m"
+        ? 120_000
+        : customAmountMs;
 
   const handleAdjust = (direction: 1 | -1) => {
     const deltaMs = direction * adjustmentMs;
@@ -375,8 +474,7 @@ function App() {
         adjustmentTotalMs: 0,
       };
       start();
-    }
-    else if (status === "running") pause();
+    } else if (status === "running") pause();
     else resume();
   };
 
@@ -385,26 +483,34 @@ function App() {
     if (!session || startedAtMs === null || activeElapsedMs <= 1000) return;
     const endedAt = Date.now();
     const totalMs = Math.max(0, endedAt - startedAtMs);
-    const record = createSession(session.taskId, session.taskName, totalMs, session.mode, {
-      id: session.id,
+    const record = createSession(
+      session.taskId,
+      session.taskName,
       totalMs,
-      goalMs: session.goalMs,
-      activeMs: activeElapsedMs,
-      compensatedMs:
-        session.mode === "countdown"
-          ? Math.max(0, session.adjustmentTotalMs)
-          : Math.max(0, -session.adjustmentTotalMs),
-      distractedMs:
-        session.mode === "countdown"
-          ? Math.max(0, session.adjustmentTotalMs)
-          : Math.max(0, -session.adjustmentTotalMs),
-      focusedMs: session.goalMs,
-      startedAt: new Date(startedAtMs).toISOString(),
-      endedAt: new Date(endedAt).toISOString(),
-      isLive: false,
-    });
+      session.mode,
+      {
+        id: session.id,
+        totalMs,
+        goalMs: session.goalMs,
+        activeMs: activeElapsedMs,
+        compensatedMs:
+          session.mode === "countdown"
+            ? Math.max(0, session.adjustmentTotalMs)
+            : Math.max(0, -session.adjustmentTotalMs),
+        distractedMs:
+          session.mode === "countdown"
+            ? Math.max(0, session.adjustmentTotalMs)
+            : Math.max(0, -session.adjustmentTotalMs),
+        focusedMs: session.goalMs,
+        startedAt: new Date(startedAtMs).toISOString(),
+        endedAt: new Date(endedAt).toISOString(),
+        isLive: false,
+      },
+    );
     setHistory((previous) => {
-      const existingIndex = previous.findIndex((entry) => entry.id === session.id);
+      const existingIndex = previous.findIndex(
+        (entry) => entry.id === session.id,
+      );
       if (existingIndex === -1) return [record, ...previous];
       const next = [...previous];
       next[existingIndex] = record;
@@ -430,7 +536,10 @@ function App() {
   };
   const applyGoal = () => {
     const nextGoalMs = Math.min(
-      Math.max(0, goalHours * 3_600_000 + goalMinutes * 60_000 + goalSeconds * 1000),
+      Math.max(
+        0,
+        goalHours * 3_600_000 + goalMinutes * 60_000 + goalSeconds * 1000,
+      ),
       24 * 60 * 60 * 1000,
     );
     if (status === "running" || status === "paused") {
@@ -442,6 +551,7 @@ function App() {
       load(nextGoalMs);
     }
     setIsGoalPanelOpen(false);
+    setTaskDismissSignal((value) => value + 1);
   };
   const ringProgress =
     mode === "countdown"
@@ -484,6 +594,7 @@ function App() {
         if (!e.repeat && status !== "idle") handleReset();
       } else if (e.key === "Escape") {
         setIsGoalPanelOpen(false);
+        setTaskDismissSignal((value) => value + 1);
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -495,26 +606,49 @@ function App() {
       <header className="app-header" data-tauri-drag-region>
         <div className="titlebar-drag-region">
           <svg className="titlebar-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 8V12L14.5 14.5" stroke="#96c2ffcc" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M7 3.33782C8.47087 2.48697 10.1786 2 12 2C17.5228 2 22 6.47715 22 12C22 17.5228 17.5228 22 12 22C6.47715 22 2 17.5228 2 12C2 10.1786 2.48697 8.47087 3.33782 7" stroke="#96c2ffcc" strokeWidth="1.5" strokeLinecap="round" />
+            <path
+              d="M12 8V12L14.5 14.5"
+              stroke="#96c2ffcc"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M7 3.33782C8.47087 2.48697 10.1786 2 12 2C17.5228 2 22 6.47715 22 12C22 17.5228 17.5228 22 12 22C6.47715 22 2 17.5228 2 12C2 10.1786 2.48697 8.47087 3.33782 7"
+              stroke="#96c2ffcc"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
           </svg>
           <span className="titlebar-title">Clockwork</span>
         </div>
 
         <div className="titlebar-controls">
-          <button className="titlebar-button" onClick={minimizeWindow} aria-label="Minimize">
+          <button
+            className="titlebar-button"
+            onClick={minimizeWindow}
+            aria-label="Minimize"
+          >
             <svg viewBox="0 0 10 10" aria-hidden="true">
               <path d="M1 5h8" />
             </svg>
           </button>
 
-          <button className="titlebar-button" onClick={maximizeWindow} aria-label="Maximize">
+          <button
+            className="titlebar-button"
+            onClick={maximizeWindow}
+            aria-label="Maximize"
+          >
             <svg viewBox="0 0 10 10" aria-hidden="true">
               <rect x="1.5" y="1.5" width="7" height="7" />
             </svg>
           </button>
 
-          <button className="titlebar-button close" onClick={closeWindow} aria-label="Close">
+          <button
+            className="titlebar-button close"
+            onClick={closeWindow}
+            aria-label="Close"
+          >
             <svg viewBox="0 0 10 10" aria-hidden="true">
               <path d="M1.5 1.5 8.5 8.5M8.5 1.5 1.5 8.5" />
             </svg>
@@ -524,48 +658,72 @@ function App() {
 
       <div className="app-shell">
         {showSidebar && (
-          <aside className={isSidebarExpanded ? "sidebar expanded" : "sidebar collapsed"}>
-          <div className="sidebar-brand">
-            <button
-              type="button"
-              className="brand-mark"
-              onClick={() => {
-                setIsGoalPanelOpen(false);
-                setIsSidebarExpanded((expanded) => !expanded);
-              }}
-              aria-label={isSidebarExpanded ? "Collapse sidebar" : "Expand sidebar"}
-              aria-expanded={isSidebarExpanded}
-            >
-              {isSidebarExpanded ? "" : (
-                <svg className="sidebar-toggle-icon" viewBox="0 0 20 20" aria-hidden="true">
-                  <path d="M3 5h14M3 10h14M3 15h14" />
-                </svg>
-              )}
-            </button>
-            <div>
-              <div className="brand-name">Clockwork</div>
-              <div className="brand-subtitle">Focus</div>
+          <aside
+            className={
+              isSidebarExpanded ? "sidebar expanded" : "sidebar collapsed"
+            }
+          >
+            <div className="sidebar-brand">
+              <button
+                type="button"
+                className="brand-mark"
+                onClick={() => {
+                  setIsGoalPanelOpen(false);
+                  setIsSidebarExpanded((expanded) => !expanded);
+                }}
+                aria-label={
+                  isSidebarExpanded ? "Collapse sidebar" : "Expand sidebar"
+                }
+                aria-expanded={isSidebarExpanded}
+              >
+                {isSidebarExpanded ? (
+                  ""
+                ) : (
+                  <svg
+                    className="sidebar-toggle-icon"
+                    viewBox="0 0 20 20"
+                    aria-hidden="true"
+                  >
+                    <path d="M3 5h14M3 10h14M3 15h14" />
+                  </svg>
+                )}
+              </button>
+              <div>
+                <div className="brand-name">Clockwork</div>
+                <div className="brand-subtitle">Focus</div>
+              </div>
             </div>
-          </div>
 
-          <AppNavigation
-            activeView={activeView}
-            onChange={(view) => {
-              setIsGoalPanelOpen(false);
-              setActiveView(view);
-            }}
-          />
+            <AppNavigation
+              activeView={activeView}
+              onChange={(view) => {
+                setIsGoalPanelOpen(false);
+                setActiveView(view);
+              }}
+            />
 
-          <div className="sidebar-summary">
-            <div className="summary-label">Today</div>
-            <div className="summary-value">{formatHistoryDuration(todayTotalMs)}</div>
-            <div className="summary-meta">{todayHistory.length} session{todayHistory.length === 1 ? "" : "s"}</div>
-          </div>
+            <div className="sidebar-summary">
+              <div className="summary-label">Today</div>
+              <div className="summary-value">
+                {formatHistoryDuration(todayTotalMs)}
+              </div>
+              <div className="summary-meta">
+                {todayHistory.length} session
+                {todayHistory.length === 1 ? "" : "s"}
+              </div>
+            </div>
 
-          <div className="sidebar-footer">
-            <div className="footer-label">Focus streak</div>
-            <div className="footer-value">{new Set(history.map((entry) => entry.completedAt.slice(0, 10))).size} days</div>
-          </div>
+            <div className="sidebar-footer">
+              <div className="footer-label">Focus streak</div>
+              <div className="footer-value">
+                {
+                  new Set(
+                    history.map((entry) => entry.completedAt.slice(0, 10)),
+                  ).size
+                }{" "}
+                days
+              </div>
+            </div>
           </aside>
         )}
 
@@ -600,8 +758,17 @@ function App() {
                     tabIndex={0}
                     aria-label="Set time goal"
                   >
-                    <svg className="timer-ring" viewBox="0 0 180 180" aria-hidden="true">
-                      <circle className="timer-ring-track" cx="90" cy="90" r={RING_RADIUS} />
+                    <svg
+                      className="timer-ring"
+                      viewBox="0 0 180 180"
+                      aria-hidden="true"
+                    >
+                      <circle
+                        className="timer-ring-track"
+                        cx="90"
+                        cy="90"
+                        r={RING_RADIUS}
+                      />
                       <circle
                         className="timer-ring-progress"
                         cx="90"
@@ -611,12 +778,19 @@ function App() {
                         strokeDashoffset={RING_CIRCUMFERENCE * ringProgress}
                       />
                     </svg>
-                    <span className="timer-time">{formatDuration(displayMs)}</span>
-                    <span className="timer-goal">Goal {formatDuration(goalMs)}</span>
+                    <span className="timer-time">
+                      {formatDuration(displayMs)}
+                    </span>
+                    <span className="timer-goal">
+                      Goal {formatDuration(goalMs)}
+                    </span>
                   </div>
 
                   {isGoalPanelOpen && (
-                    <div className="goal-panel-backdrop" onClick={() => setIsGoalPanelOpen(false)}>
+                    <div
+                      className="goal-panel-backdrop"
+                      onClick={() => setIsGoalPanelOpen(false)}
+                    >
                       <section
                         className="goal-panel glass-card"
                         role="dialog"
@@ -647,10 +821,18 @@ function App() {
                           onSecondsChange={setGoalSeconds}
                         />
                         <div className="goal-panel-actions">
-                          <button type="button" className="btn btn-secondary" onClick={() => setIsGoalPanelOpen(false)}>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => setIsGoalPanelOpen(false)}
+                          >
                             Cancel
                           </button>
-                          <button type="button" className="btn btn-primary" onClick={applyGoal}>
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={applyGoal}
+                          >
                             Apply goal
                           </button>
                         </div>
@@ -661,10 +843,18 @@ function App() {
                   <div className="timer-metadata">
                     <div className="timer-metadata-mode">
                       <span className="field-label">Mode</span>
-                      <div className="mode-toggle" role="tablist" aria-label="Timer mode">
+                      <div
+                        className="mode-toggle"
+                        role="tablist"
+                        aria-label="Timer mode"
+                      >
                         <button
                           type="button"
-                          className={mode === "countdown" ? "mode-toggle-btn active" : "mode-toggle-btn"}
+                          className={
+                            mode === "countdown"
+                              ? "mode-toggle-btn active"
+                              : "mode-toggle-btn"
+                          }
                           onClick={() => handleModeChange("countdown")}
                           aria-pressed={mode === "countdown"}
                           disabled={status === "running"}
@@ -673,7 +863,11 @@ function App() {
                         </button>
                         <button
                           type="button"
-                          className={mode === "counter" ? "mode-toggle-btn active" : "mode-toggle-btn"}
+                          className={
+                            mode === "counter"
+                              ? "mode-toggle-btn active"
+                              : "mode-toggle-btn"
+                          }
                           onClick={() => handleModeChange("counter")}
                           aria-pressed={mode === "counter"}
                           disabled={status === "running"}
@@ -693,17 +887,27 @@ function App() {
                     )}
                     <div className="meta-row">
                       <span className="meta-label">Active time</span>
-                      <span className="meta-value">{formatDuration(activeElapsedMs)}</span>
+                      <span className="meta-value">
+                        {formatDuration(activeElapsedMs)}
+                      </span>
                     </div>
                   </div>
                 </div>
 
                 <div className="session-controls">
-                  <button className="btn btn-secondary" onClick={handleReset} disabled={status === "idle"}>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={handleReset}
+                    disabled={status === "idle"}
+                  >
                     Reset
                   </button>
                   <button
-                    className={status === "running" ? "btn btn-primary running" : "btn btn-primary"}
+                    className={
+                      status === "running"
+                        ? "btn btn-primary running"
+                        : "btn btn-primary"
+                    }
                     onClick={handleStartPauseResume}
                   >
                     {primaryLabel}
@@ -713,21 +917,37 @@ function App() {
 
               <section className="glass-card controls-card">
                 <div className="adjust-row">
-                  <div className="segment" role="radiogroup" aria-label="Adjustment amount">
+                  <div
+                    className="segment"
+                    role="radiogroup"
+                    aria-label="Adjustment amount"
+                  >
                     <button
-                      className={selection === "20s" ? "segment-btn selected" : "segment-btn"}
+                      className={
+                        selection === "20s"
+                          ? "segment-btn selected"
+                          : "segment-btn"
+                      }
                       onClick={() => setSelection("20s")}
                     >
                       20 s
                     </button>
                     <button
-                      className={selection === "2m" ? "segment-btn selected" : "segment-btn"}
+                      className={
+                        selection === "2m"
+                          ? "segment-btn selected"
+                          : "segment-btn"
+                      }
                       onClick={() => setSelection("2m")}
                     >
                       2 min
                     </button>
                     <button
-                      className={selection === "custom" ? "segment-btn selected" : "segment-btn"}
+                      className={
+                        selection === "custom"
+                          ? "segment-btn selected"
+                          : "segment-btn"
+                      }
                       onClick={() => setSelection("custom")}
                     >
                       Custom
@@ -735,10 +955,18 @@ function App() {
                   </div>
 
                   <div className="adjust-buttons">
-                    <button className="btn-adjust" onClick={() => handleAdjust(-1)} aria-label="Subtract time">
+                    <button
+                      className="btn-adjust"
+                      onClick={() => handleAdjust(-1)}
+                      aria-label="Subtract time"
+                    >
                       −
                     </button>
-                    <button className="btn-adjust" onClick={() => handleAdjust(1)} aria-label="Add time">
+                    <button
+                      className="btn-adjust"
+                      onClick={() => handleAdjust(1)}
+                      aria-label="Add time"
+                    >
                       +
                     </button>
                   </div>
@@ -770,10 +998,13 @@ function App() {
               <TaskView
                 tasks={tasks}
                 selectedTaskId={selectedTaskId}
+                dismissSignal={taskDismissSignal}
+                sidebarExpanded={isSidebarExpanded}
                 onSelectTask={handleSelectTask}
                 onAddTask={handleAddTask}
                 onUpdateTask={handleUpdateTask}
                 onDeleteTask={handleDeleteTask}
+                onReorderTasks={handleReorderTasks}
               />
             </div>
           )}
@@ -790,14 +1021,42 @@ function App() {
               <section className="history-task-summary">
                 <div className="history-section-label">Today's tasks</div>
                 {taskStatistics.length === 0 ? (
-                  <div className="history-task-summary-empty">No active task goals or sessions in the current period.</div>
+                  <div className="history-task-summary-empty">
+                    No active task goals or sessions in the current period.
+                  </div>
                 ) : (
                   <div className="task-statistics-list">
                     {taskStatistics.map((statistic) => (
-                      <div className="task-statistics-row" key={statistic.task.id}>
-                        <span className="task-statistics-indicator" style={{ "--goal-progress": `${statistic.percentage ?? 0}%` } as CSSProperties} />
-                        <div className="task-statistics-main"><strong>{statistic.task.name}</strong><span>{formatHistoryDuration(statistic.focusedMs)} focused · {statistic.sessions} session{statistic.sessions === 1 ? "" : "s"}</span></div>
-                        <div className="task-statistics-goal"><span>{statistic.task.goal ? `${formatHistoryDuration(statistic.task.goal.amountMs)} / ${statistic.task.goal.duration === "custom" ? `${statistic.task.goal.customDays} days` : statistic.task.goal.duration}` : "No goal"}</span>{statistic.percentage !== null && <strong>{Math.round(statistic.percentage)}%</strong>}</div>
+                      <div
+                        className="task-statistics-row"
+                        key={statistic.task.id}
+                      >
+                        <span
+                          className="task-statistics-indicator"
+                          style={
+                            {
+                              "--goal-progress": `${statistic.percentage ?? 0}%`,
+                            } as CSSProperties
+                          }
+                        />
+                        <div className="task-statistics-main">
+                          <strong>{statistic.task.name}</strong>
+                          <span>
+                            {formatHistoryDuration(statistic.focusedMs)} focused
+                            · {statistic.sessions} session
+                            {statistic.sessions === 1 ? "" : "s"}
+                          </span>
+                        </div>
+                        <div className="task-statistics-goal">
+                          <span>
+                            {statistic.task.goal
+                              ? `${formatHistoryDuration(statistic.task.goal.amountMs)} / ${statistic.task.goal.duration === "custom" ? `${statistic.task.goal.customDays} days` : statistic.task.goal.duration}`
+                              : "No goal"}
+                          </span>
+                          {statistic.percentage !== null && (
+                            <strong>{Math.round(statistic.percentage)}%</strong>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -805,85 +1064,275 @@ function App() {
               </section>
 
               <section className="glass-card history-panel">
-                <button type="button" className="history-panel-header history-panel-toggle" onClick={() => setIsHistoryOpen((open) => !open)} aria-expanded={isHistoryOpen}>
+                <button
+                  type="button"
+                  className="history-panel-header history-panel-toggle"
+                  onClick={() => setIsHistoryOpen((open) => !open)}
+                  aria-expanded={isHistoryOpen}
+                >
                   <span className="field-label">Recent sessions</span>
-                  <span className="history-count">{history.length} total · {isHistoryOpen ? "Collapse" : "Expand"}</span>
+                  <span className="history-count">
+                    {history.length} total{" "}
+                    <svg
+                      className="history-collapse-icon"
+                      viewBox="0 0 16 16"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d={isHistoryOpen ? "m3 6 5 5 5-5" : "m3 10 5-5 5 5"}
+                      />
+                    </svg>
+                  </span>
                 </button>
 
-                {isHistoryOpen && <div className="history-list">
-                  {history.length === 0 ? (
-                    <div className="history-placeholder">
-                      <h2>No sessions yet</h2>
-                      <p>Started focus sessions will appear here once they run for more than one second.</p>
-                    </div>
-                  ) : groupedHistory.map((group) => (
-                    <section className="history-day-group" key={group.date}>
-                      <button type="button" className="history-day-divider history-day-toggle" onClick={() => setCollapsedHistoryDays((current) => { const next = new Set(current); if (next.has(group.date)) next.delete(group.date); else next.add(group.date); return next; })} aria-expanded={!collapsedHistoryDays.has(group.date)}>
-                        <span>{new Date(group.entries[0].startedAt ?? group.entries[0].completedAt).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}</span>
-                        <span>{collapsedHistoryDays.has(group.date) ? "Expand" : "Collapse"}</span>
-                      </button>
-                      {!collapsedHistoryDays.has(group.date) && <div className="history-day-list">
-                        {group.entries.map((entry) => (
-                          <details className="history-entry" key={entry.id}>
-                            <summary className="history-row">
-                              <div className="history-task">
-                                {editingHistoryId === entry.id ? (
-                                  <input
-                                    className="history-task-edit"
-                                    value={editingHistoryName}
-                                    maxLength={60}
-                                    onChange={(event) => setEditingHistoryName(event.target.value)}
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      event.preventDefault();
-                                    }}
-                                    aria-label="History task name"
-                                  />
-                                ) : (
-                                  <span>{entry.taskName}</span>
-                                )}
-                              </div>
-                              <div className="history-duration" title="Focused time">
-                                <span className="history-duration-label">{entry.isLive ? "Live" : "Focused"}</span>
-                                {formatHistoryDuration(recordFocusedMs(entry))}
-                              </div>
-                              <div className="history-total" title="Session start and end time">
-                                {entry.startedAt ? new Date(entry.startedAt).toLocaleTimeString() : "—"} –{" "}
-                                {entry.endedAt ? new Date(entry.endedAt).toLocaleTimeString() : "—"}
-                              </div>
-                            </summary>
-                            <div className="history-actions" onClick={(event) => event.stopPropagation()}>
-                              {editingHistoryId === entry.id ? (
-                                <>
-                                  <button type="button" className="history-action primary" onClick={() => saveHistoryEdit(entry.id)}>Save</button>
-                                  <button type="button" className="history-action" onClick={() => setEditingHistoryId(null)}>Cancel</button>
-                                </>
-                              ) : (
-                                <>
-                                  <button type="button" className="history-action" onClick={() => startHistoryEdit(entry)}>Edit task</button>
-                                  <button type="button" className="history-action danger" onClick={() => deleteHistoryEntry(entry)}>Delete</button>
-                                </>
-                              )}
+                {isHistoryOpen && (
+                  <div className="history-list">
+                    {history.length === 0 ? (
+                      <div className="history-placeholder">
+                        <h2>No sessions yet</h2>
+                        <p>
+                          Started focus sessions will appear here once they run
+                          for more than one second.
+                        </p>
+                      </div>
+                    ) : (
+                      groupedHistory.map((group) => (
+                        <section className="history-day-group" key={group.date}>
+                          <button
+                            type="button"
+                            className="history-day-divider history-day-toggle"
+                            onClick={() =>
+                              setCollapsedHistoryDays((current) => {
+                                const next = new Set(current);
+                                if (next.has(group.date))
+                                  next.delete(group.date);
+                                else next.add(group.date);
+                                return next;
+                              })
+                            }
+                            aria-expanded={
+                              !collapsedHistoryDays.has(group.date)
+                            }
+                          >
+                            <span>
+                              {new Date(
+                                group.entries[0].startedAt ??
+                                  group.entries[0].completedAt,
+                              ).toLocaleDateString(undefined, {
+                                weekday: "short",
+                                month: "short",
+                                day: "numeric",
+                              })}
+                            </span>
+                            <svg
+                              className="history-collapse-icon"
+                              viewBox="0 0 16 16"
+                              aria-hidden="true"
+                            >
+                              <path
+                                d={
+                                  collapsedHistoryDays.has(group.date)
+                                    ? "m3 10 5-5 5 5"
+                                    : "m3 6 5 5 5-5"
+                                }
+                              />
+                            </svg>
+                          </button>
+                          {!collapsedHistoryDays.has(group.date) && (
+                            <div className="history-day-list">
+                              {group.entries.map((entry) => (
+                                <details
+                                  className="history-entry"
+                                  key={entry.id}
+                                >
+                                  <summary className="history-row">
+                                    <div className="history-task">
+                                      {editingHistoryId === entry.id ? (
+                                        <input
+                                          className="history-task-edit"
+                                          value={editingHistoryName}
+                                          maxLength={60}
+                                          onChange={(event) =>
+                                            setEditingHistoryName(
+                                              event.target.value,
+                                            )
+                                          }
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            event.preventDefault();
+                                          }}
+                                          aria-label="History task name"
+                                        />
+                                      ) : (
+                                        <span>{entry.taskName}</span>
+                                      )}
+                                    </div>
+                                    <div
+                                      className="history-duration"
+                                      title="Focused time"
+                                    >
+                                      <span className="history-duration-label">
+                                        {entry.isLive ? "Live" : "Focused"}
+                                      </span>
+                                      {formatHistoryDuration(
+                                        recordFocusedMs(entry),
+                                      )}
+                                    </div>
+                                    <div
+                                      className="history-total"
+                                      title="Session start and end time"
+                                    >
+                                      {entry.startedAt
+                                        ? new Date(
+                                            entry.startedAt,
+                                          ).toLocaleTimeString()
+                                        : "—"}{" "}
+                                      –{" "}
+                                      {entry.endedAt
+                                        ? new Date(
+                                            entry.endedAt,
+                                          ).toLocaleTimeString()
+                                        : "—"}
+                                    </div>
+                                  </summary>
+                                  <div
+                                    className="history-actions"
+                                    onClick={(event) => event.stopPropagation()}
+                                  >
+                                    {editingHistoryId === entry.id ? (
+                                      <>
+                                        <button
+                                          type="button"
+                                          className="history-action primary"
+                                          onClick={() =>
+                                            saveHistoryEdit(entry.id)
+                                          }
+                                        >
+                                          Save
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="history-action"
+                                          onClick={() =>
+                                            setEditingHistoryId(null)
+                                          }
+                                        >
+                                          Cancel
+                                        </button>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <button
+                                          type="button"
+                                          className="history-action"
+                                          onClick={() =>
+                                            startHistoryEdit(entry)
+                                          }
+                                        >
+                                          Edit task
+                                        </button>
+                                        {deletingHistoryId === entry.id ? (
+                                          <span className="history-delete-confirm">
+                                            <span>Delete?</span>
+                                            <button
+                                              type="button"
+                                              className="history-action danger"
+                                              onClick={() =>
+                                                deleteHistoryEntry(entry)
+                                              }
+                                            >
+                                              Yes
+                                            </button>
+                                            <button
+                                              type="button"
+                                              className="history-action"
+                                              onClick={() =>
+                                                setDeletingHistoryId(null)
+                                              }
+                                            >
+                                              No
+                                            </button>
+                                          </span>
+                                        ) : (
+                                          <button
+                                            type="button"
+                                            className="history-action danger"
+                                            onClick={() =>
+                                              setDeletingHistoryId(entry.id)
+                                            }
+                                          >
+                                            Delete
+                                          </button>
+                                        )}
+                                      </>
+                                    )}
+                                  </div>
+                                  <div className="history-details">
+                                    <span>
+                                      Status:{" "}
+                                      {entry.isLive ? "Live" : "Completed"}
+                                    </span>
+                                    <span>
+                                      Mode:{" "}
+                                      {entry.mode === "countdown"
+                                        ? "Countdown"
+                                        : "Counter"}
+                                    </span>
+                                    <span>
+                                      Goal:{" "}
+                                      {formatHistoryDuration(
+                                        entry.goalMs ?? entry.durationMs,
+                                      )}
+                                    </span>
+                                    <span>
+                                      Total:{" "}
+                                      {formatHistoryDuration(
+                                        recordTotalMs(entry),
+                                      )}
+                                    </span>
+                                    <span>
+                                      Active:{" "}
+                                      {formatHistoryDuration(
+                                        recordActiveMs(entry),
+                                      )}
+                                    </span>
+                                    <span>
+                                      Focused:{" "}
+                                      {formatHistoryDuration(
+                                        recordFocusedMs(entry),
+                                      )}
+                                    </span>
+                                    <span>
+                                      Compensated:{" "}
+                                      {formatHistoryDuration(
+                                        recordCompensatedMs(entry),
+                                      )}
+                                    </span>
+                                    <span>
+                                      {entry.startedAt
+                                        ? new Date(
+                                            entry.startedAt,
+                                          ).toLocaleTimeString()
+                                        : "—"}{" "}
+                                      –{" "}
+                                      {entry.endedAt
+                                        ? new Date(
+                                            entry.endedAt,
+                                          ).toLocaleTimeString()
+                                        : new Date(
+                                            entry.completedAt,
+                                          ).toLocaleTimeString()}
+                                    </span>
+                                  </div>
+                                </details>
+                              ))}
                             </div>
-                            <div className="history-details">
-                              <span>Status: {entry.isLive ? "Live" : "Completed"}</span>
-                              <span>Mode: {entry.mode === "countdown" ? "Countdown" : "Counter"}</span>
-                              <span>Goal: {formatHistoryDuration(entry.goalMs ?? entry.durationMs)}</span>
-                              <span>Total: {formatHistoryDuration(recordTotalMs(entry))}</span>
-                              <span>Active: {formatHistoryDuration(recordActiveMs(entry))}</span>
-                              <span>Focused: {formatHistoryDuration(recordFocusedMs(entry))}</span>
-                              <span>Compensated: {formatHistoryDuration(recordCompensatedMs(entry))}</span>
-                              <span>
-                                {entry.startedAt ? new Date(entry.startedAt).toLocaleTimeString() : "—"} –{" "}
-                                {entry.endedAt ? new Date(entry.endedAt).toLocaleTimeString() : new Date(entry.completedAt).toLocaleTimeString()}
-                              </span>
-                            </div>
-                          </details>
-                        ))}
-                      </div>}
-                    </section>
-                  ))}
-                </div>}
+                          )}
+                        </section>
+                      ))
+                    )}
+                  </div>
+                )}
               </section>
             </div>
           )}

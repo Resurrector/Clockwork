@@ -1,4 +1,4 @@
-﻿import { useState } from "react";
+import { useState } from "react";
 import type { Preset } from "../types";
 import { createPresetId, loadPresets, savePresets } from "../lib/presets";
 import { formatDuration } from "../lib/time";

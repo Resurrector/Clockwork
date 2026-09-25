@@ -9,7 +9,6 @@ export type Task = {
   name: string;
   goal?: TaskGoal;
   presetTimeMs?: number;
-  pinned: boolean;
   archived: boolean;
   createdAt: string;
 };

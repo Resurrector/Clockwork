@@ -13,10 +13,7 @@ export function TaskSelector({
   onSelectTask,
 }: TaskSelectorProps) {
   const visibleTasks = tasks.filter((task) => !task.archived);
-  const sortedTasks = [...visibleTasks].sort((left, right) => {
-    if (left.pinned !== right.pinned) return Number(right.pinned) - Number(left.pinned);
-    return left.name.localeCompare(right.name);
-  });
+  const sortedTasks = visibleTasks;
 
   const selectedTask =
     sortedTasks.find((task) => task.id === selectedTaskId) ?? sortedTasks[0] ?? null;
@@ -64,7 +61,6 @@ export function TaskSelector({
                 }}
               >
                 <span>{task.name}</span>
-                {task.pinned && <span aria-label="Pinned">★</span>}
               </button>
             ))}
           </div>
